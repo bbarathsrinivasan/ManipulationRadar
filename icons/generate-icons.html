@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Generate Icons</title>
+</head>
+<body>
+  <h1>Manipulation Radar Icon Generator</h1>
+  <p>Right-click each icon below and "Save image as..." to save as PNG:</p>
+  
+  <div style="margin: 20px 0;">
+    <h2>16x16 Icon</h2>
+    <canvas id="icon16" width="16" height="16"></canvas>
+  </div>
+  
+  <div style="margin: 20px 0;">
+    <h2>48x48 Icon</h2>
+    <canvas id="icon48" width="48" height="48"></canvas>
+  </div>
+  
+  <div style="margin: 20px 0;">
+    <h2>128x128 Icon</h2>
+    <canvas id="icon128" width="128" height="128"></canvas>
+  </div>
+
+  <script>
+    function drawIcon(canvas, size) {
+      const ctx = canvas.getContext('2d');
+      
+      // Blue background
+      ctx.fillStyle = '#3B82F6';
+      ctx.fillRect(0, 0, size, size);
+      
+      // White shield emoji (simplified as a shield shape)
+      ctx.fillStyle = 'white';
+      ctx.font = `${size * 0.6}px Arial`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('🛡️', size / 2, size / 2);
+    }
+    
+    drawIcon(document.getElementById('icon16'), 16);
+    drawIcon(document.getElementById('icon48'), 48);
+    drawIcon(document.getElementById('icon128'), 128);
+  </script>
+</body>
+</html>
