@@ -84,6 +84,7 @@ export function detectManipulation(text) {
         type: 'sycophancy',
         severity: 'medium',
         message: `Excessive agreement detected: "${matches[0]}"`,
+        matchedText: matches[0],
         pattern: index,
       });
     }
@@ -98,6 +99,7 @@ export function detectManipulation(text) {
         type: 'flattery',
         severity: 'medium',
         message: `Excessive flattery detected: "${matches[0]}"`,
+        matchedText: matches[0],
         pattern: index,
       });
     }
@@ -112,6 +114,7 @@ export function detectManipulation(text) {
         type: 'persuasion',
         severity: 'high',
         message: `Persuasive language detected: "${matches[0]}"`,
+        matchedText: matches[0],
         pattern: index,
       });
     }
@@ -126,6 +129,7 @@ export function detectManipulation(text) {
         type: 'emotional',
         severity: 'high',
         message: `Emotional manipulation detected: "${matches[0]}"`,
+        matchedText: matches[0],
         pattern: index,
       });
     }
@@ -140,6 +144,7 @@ export function detectManipulation(text) {
         type: 'authority',
         severity: 'medium',
         message: `Authority appeal detected: "${matches[0]}"`,
+        matchedText: matches[0],
         pattern: index,
       });
     }

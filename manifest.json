@@ -9,6 +9,7 @@
   ],
   "host_permissions": [
     "https://chat.openai.com/*",
+    "https://chatgpt.com/*",
     "https://claude.ai/*"
   ],
   "background": {
@@ -19,6 +20,7 @@
     {
       "matches": [
         "https://chat.openai.com/*",
+        "https://chatgpt.com/*",
         "https://claude.ai/*"
       ],
       "js": ["src/content/content.js"]

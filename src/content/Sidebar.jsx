@@ -3,11 +3,18 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { getScoreColor, getScoreBgColor, getSeverityColor } from '../lib/scorer.js';
 import '../styles.css';
 
-function Sidebar({ trustScore = 100, recentFlags = [], messageHistory = [] }) {
+function Sidebar({ trustScore = 100, recentFlags = [], messageHistory = [], selectedMessage = null, onBackToOverview = null }) {
   const [isExpanded, setIsExpanded] = useState(() => {
     const saved = localStorage.getItem('manipulationRadarExpanded');
     return saved !== null ? JSON.parse(saved) : true; // Default to true (expanded)
   });
+
+  // Auto-expand sidebar when message is selected
+  useEffect(() => {
+    if (selectedMessage && !isExpanded) {
+      setIsExpanded(true);
+    }
+  }, [selectedMessage, isExpanded]);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const [iconPosition, setIconPosition] = useState(() => {
     const saved = localStorage.getItem('manipulationRadarIconPosition');
@@ -66,45 +73,114 @@ function Sidebar({ trustScore = 100, recentFlags = [], messageHistory = [] }) {
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
-  return (
-    <AnimatePresence mode="wait">
-      {isExpanded ? (
-        <motion.div
-          key="expanded"
-          initial={{ x: 320, opacity: 0 }}
-          animate={{ x: 0, opacity: 1 }}
-          exit={{ x: 320, opacity: 0 }}
-          transition={{ duration: 0.3, ease: "easeInOut" }}
-          className="pointer-events-auto h-full w-full bg-gray-900 text-white overflow-hidden flex flex-col fixed top-0 right-0"
-          style={{ width: '320px', height: '100vh' }}
-        >
-          {/* Header */}
-          <div className="p-4 border-b border-gray-700 flex items-center justify-between">
-            <div>
-              <h2 className="text-xl font-bold text-white mb-1">Manipulation Radar</h2>
-              <p className="text-xs text-gray-400">AI Trust Score Monitor</p>
-            </div>
-            <button
-              onClick={toggleExpanded}
-              className="w-8 h-8 flex items-center justify-center rounded hover:bg-gray-700 transition-colors p-1"
-              aria-label="Close sidebar"
-            >
-              <svg
-                className="w-5 h-5 text-gray-400"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M6 18L18 6M6 6l12 12"
-                />
-              </svg>
-            </button>
-          </div>
+  // Message Detail View Component
+  const MessageDetailView = () => {
+    if (!selectedMessage) return null;
 
+    return (
+      <div className="flex flex-col h-full">
+        {/* Header with Back Button */}
+        <div className="p-4 border-b border-gray-700 flex items-center justify-between">
+          <div>
+            <h2 className="text-xl font-bold text-white mb-1">Message Analysis</h2>
+            <p className="text-xs text-gray-400">Detailed breakdown</p>
+          </div>
+          {onBackToOverview && (
+            <button
+              onClick={onBackToOverview}
+              className="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 rounded transition-colors"
+            >
+              ← Back
+            </button>
+          )}
+        </div>
+
+        {/* Message Text */}
+        <div className="p-4 border-b border-gray-700 max-h-32 overflow-y-auto">
+          <div className="text-xs text-gray-400 mb-2">Message Text</div>
+          <div className="text-sm text-gray-300 whitespace-pre-wrap break-words">
+            {selectedMessage.text}
+          </div>
+        </div>
+
+        {/* Trust Score */}
+        <div className={`p-6 ${getScoreBgColor(selectedMessage.score)} border-b border-gray-700`}>
+          <div className="text-sm text-gray-400 mb-2">Trust Score</div>
+          <motion.div
+            key={selectedMessage.score}
+            initial={{ scale: 0.8, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={{ duration: 0.3 }}
+            className={`text-6xl font-bold ${getScoreColor(selectedMessage.score)}`}
+          >
+            {selectedMessage.score}
+          </motion.div>
+          <div className="text-xs text-gray-400 mt-2">
+            {selectedMessage.score >= 90 && '✓ Highly Trustworthy'}
+            {selectedMessage.score >= 70 && selectedMessage.score < 90 && '⚠ Moderately Trustworthy'}
+            {selectedMessage.score >= 50 && selectedMessage.score < 70 && '⚠ Low Trust'}
+            {selectedMessage.score < 50 && '✗ High Risk'}
+          </div>
+          {selectedMessage.timestamp && (
+            <div className="text-xs text-gray-500 mt-2">
+              Analyzed: {formatTime(selectedMessage.timestamp)}
+            </div>
+          )}
+        </div>
+
+        {/* Flags Breakdown */}
+        <div className="flex-1 overflow-y-auto p-4">
+          <div className="text-sm font-semibold text-gray-300 mb-3">
+            Flags Detected ({selectedMessage.flags?.length || 0})
+          </div>
+          
+          {!selectedMessage.flags || selectedMessage.flags.length === 0 ? (
+            <div className="text-sm text-gray-500 text-center py-8">
+              No manipulation flags detected
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {selectedMessage.flags.map((flag, index) => (
+                <motion.div
+                  key={`flag-${index}`}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.2, delay: index * 0.05 }}
+                  className="bg-gray-800 rounded-lg p-4 border border-gray-700"
+                >
+                  <div className="flex items-start justify-between mb-2">
+                    <span
+                      className={`px-2 py-1 rounded text-xs font-medium border ${getSeverityColor(flag.severity)}`}
+                    >
+                      {flag.severity.toUpperCase()}
+                    </span>
+                    <span className="text-xs text-gray-400 font-semibold capitalize">
+                      {flag.type}
+                    </span>
+                  </div>
+                  <div className="text-sm text-gray-300 mb-2">
+                    {flag.message}
+                  </div>
+                  {flag.matchedText && (
+                    <div className="mt-2 pt-2 border-t border-gray-700">
+                      <div className="text-xs text-gray-400 mb-1">Matched phrase:</div>
+                      <div className="text-xs text-gray-200 bg-gray-900/50 px-2 py-1 rounded font-mono">
+                        "{flag.matchedText}"
+                      </div>
+                    </div>
+                  )}
+                </motion.div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // Overview View Component (existing view)
+  const OverviewView = () => (
+    <>
       {/* Trust Score Display */}
       <div className={`p-6 ${getScoreBgColor(trustScore)} border-b border-gray-700`}>
         <div className="text-sm text-gray-400 mb-2">Trust Score</div>
@@ -241,6 +317,55 @@ function Sidebar({ trustScore = 100, recentFlags = [], messageHistory = [] }) {
           )}
         </AnimatePresence>
       </div>
+    </>
+  );
+
+  return (
+    <AnimatePresence mode="wait">
+      {isExpanded ? (
+        <motion.div
+          key="expanded"
+          initial={{ x: 320, opacity: 0 }}
+          animate={{ x: 0, opacity: 1 }}
+          exit={{ x: 320, opacity: 0 }}
+          transition={{ duration: 0.3, ease: "easeInOut" }}
+          className="pointer-events-auto h-full w-full bg-gray-900 text-white overflow-hidden flex flex-col fixed top-0 right-0"
+          style={{ width: '320px', height: '100vh' }}
+        >
+          {/* Conditional Rendering: Message Detail or Overview */}
+          {selectedMessage ? (
+            <MessageDetailView />
+          ) : (
+            <>
+              {/* Header */}
+              <div className="p-4 border-b border-gray-700 flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-bold text-white mb-1">Manipulation Radar</h2>
+                  <p className="text-xs text-gray-400">AI Trust Score Monitor</p>
+                </div>
+                <button
+                  onClick={toggleExpanded}
+                  className="w-8 h-8 flex items-center justify-center rounded hover:bg-gray-700 transition-colors p-1"
+                  aria-label="Close sidebar"
+                >
+                  <svg
+                    className="w-5 h-5 text-gray-400"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
+                </button>
+              </div>
+              <OverviewView />
+            </>
+          )}
         </motion.div>
       ) : (
         <motion.button
