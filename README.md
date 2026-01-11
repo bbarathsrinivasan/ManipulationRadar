@@ -1,74 +1,50 @@
-# 🛡️ Manipulation Radar
+# Manipulation Radar
 
-<div align="center">
+A Chrome extension that helps users identify manipulation patterns and reliability issues in AI assistant responses (ChatGPT and Claude). The extension provides on-demand verification, prompt improvement suggestions, and detailed analysis powered by Azure AI Foundry.
 
-**A Chrome extension that detects manipulation patterns in AI conversations**
+![Manipulation Radar](icons/icon128.png)
 
-[![Chrome Extension](https://img.shields.io/badge/Chrome-Extension-4285F4?logo=google-chrome&logoColor=white)](https://chrome.google.com/webstore)
-[![Manifest V3](https://img.shields.io/badge/Manifest-V3-4285F4?logo=google-chrome)](https://developer.chrome.com/docs/extensions/mv3/)
-[![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=white)](https://reactjs.org/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+## Features
 
-</div>
+### 🔍 On-Demand Verification
+- **Verify Response Button**: Click "🔍 Verify Response" below any AI message to analyze it
+- **Real-time Analysis**: Uses Azure AI Foundry to detect manipulation patterns and assess reliability
+- **Detailed Results**: Shows risk score, reliability score, detected issues, and improvement suggestions
+- **Verification History**: All verifications are tracked and displayed in the sidebar
 
----
+### ✨ Prompt Improvement
+- **Improve Prompt Button**: Click "✨ Improve Prompt" below user messages to refine your prompts
+- **While Typing**: Get prompt suggestions as you type (appears after 2-3 characters)
+- **AI-Powered Refinement**: Rewrites prompts to be more neutral, evidence-seeking, and non-manipulative
+- **One-Click Insert**: Insert improved prompts directly into the input field
 
-## 📋 Table of Contents
+### 🛡️ Single-Active-Tab Lock System
+- **One Tab at a Time**: Extension runs in only one tab across all browser windows
+- **Lock Management**: Other tabs show "Locked Mode" with option to "Take Over"
+- **Persistent State**: Lock state persists across browser sessions
+- **Auto-Cleanup**: Lock automatically releases when tab closes or navigates away
 
-- [What It Does](#-what-it-does)
-- [Features](#-features)
-- [Installation](#-installation)
-- [Usage](#-usage)
-- [Technical Stack](#-technical-stack)
-- [Current Implementation](#-current-implementation)
-- [Future Enhancements](#-future-enhancements)
-- [Project Structure](#-project-structure)
-- [Development](#-development)
-- [Contributing](#-contributing)
+### 📊 Sidebar Dashboard
+- **Verification Status**: Shows "Online" status with green indicator
+- **Verification History**: Displays all completed verifications with scores and detections
+- **Collapsible Design**: Expand/collapse sidebar or minimize to a draggable icon
+- **Message Details**: Click on verification entries to see detailed breakdown
 
----
+### 🎨 Modern UI
+- **Glassmorphism Design**: Beautiful frosted glass effects throughout
+- **Dark Theme**: Consistent dark theme matching ChatGPT/Claude
+- **Smooth Animations**: Framer Motion powered transitions
+- **Responsive**: Works seamlessly on both ChatGPT and Claude interfaces
 
-## 🎯 What It Does
-
-**Manipulation Radar** is a Chrome extension that monitors AI conversations in real-time to help users identify when AI responses use manipulative techniques. It provides trust scores and detailed flags to enable more informed interactions with AI assistants.
-
-### Supported Platforms
-- ✅ **ChatGPT** (chat.openai.com)
-- ✅ **Claude** (claude.ai)
-
----
-
-## ✨ Features
-
-### 🔍 Real-Time Detection
-- **Live Monitoring**: Automatically detects and analyzes AI responses as they appear
-- **5 Manipulation Types**: Identifies sycophancy, flattery, persuasion, emotional manipulation, and authority appeals
-- **Trust Score**: Calculates a 0-100 trust score for each response
-
-### 📊 Visual Dashboard
-- **Collapsible Sidebar**: Starts expanded, can be collapsed to a draggable icon
-- **Animated Trust Scores**: Color-coded scores with smooth animations
-  - 🟢 **Green (90-100)**: Highly Trustworthy
-  - 🟡 **Yellow (70-89)**: Moderately Trustworthy
-  - 🟠 **Orange (50-69)**: Low Trust
-  - 🔴 **Red (0-49)**: High Risk
-- **Recent Flags**: Displays manipulation flags with severity indicators
-- **Statistics**: Detailed breakdown of detected patterns
-
-### ⚙️ Customization
-- **Settings Popup**: Enable/disable extension and adjust sensitivity
-- **Persistent Preferences**: Remembers sidebar state and icon position
-- **Draggable Icon**: Position the collapsed icon anywhere on the right edge
-
----
-
-## 🚀 Installation
+## Installation
 
 ### Prerequisites
 - Node.js 18+ and npm
 - Chrome browser
+- Supabase account (for backend)
+- Azure AI Foundry account (for AI analysis)
 
-### Build Steps
+### Setup
 
 1. **Clone the repository**
    ```bash
@@ -81,239 +57,239 @@
    npm install
    ```
 
-3. **Create extension icons**
-   - Open `icons/generate-icons.html` in a browser
-   - Right-click each canvas and save as:
-     - `icon16.png` (16x16 pixels)
-     - `icon48.png` (48x48 pixels)
-     - `icon128.png` (128x128 pixels)
-   - Or use the SVG template at `icons/icon-template.svg` and convert to PNG
+3. **Configure environment variables**
+   Create a `.env` file in the root directory:
+   ```env
+   VITE_SUPABASE_URL=https://your-project.supabase.co
+   VITE_SUPABASE_ANON_KEY=your-anon-key
+   ```
 
-4. **Build the extension**
+4. **Set up Supabase**
+   - Create a new Supabase project
+   - Run database migrations:
+     ```bash
+     supabase db push
+     ```
+   - Deploy Edge Functions:
+     ```bash
+     supabase functions deploy verify-manipulation
+     supabase functions deploy improve-prompt
+     ```
+   - Set Edge Function secrets in Supabase Dashboard:
+     - `AZURE_OPENAI_API_KEY`: Your Azure AI Foundry API key
+     - `AZURE_OPENAI_BASE_URL`: Your Azure AI Foundry endpoint (e.g., `https://your-resource.openai.azure.com/openai/v1/`)
+     - `AZURE_OPENAI_DEPLOYMENT`: Your deployment name (e.g., `gpt-5-nano`)
+     - `SUPABASE_URL`: Your Supabase project URL
+     - `SUPABASE_SERVICE_ROLE_KEY`: Your Supabase service role key
+
+5. **Build the extension**
    ```bash
    npm run build
    ```
 
-5. **Load in Chrome**
+6. **Load in Chrome**
    - Open Chrome and navigate to `chrome://extensions/`
-   - Enable **"Developer mode"** (toggle in top-right)
-   - Click **"Load unpacked"**
-   - Select the `dist` folder from this project
+   - Enable "Developer mode"
+   - Click "Load unpacked"
+   - Select the `dist` directory
 
----
+## Usage
 
-## 📖 Usage
+### Verifying AI Responses
 
-### Getting Started
+1. Navigate to ChatGPT (`chat.openai.com` or `chatgpt.com`) or Claude (`claude.ai`)
+2. Wait for an AI response
+3. Click the "🔍 Verify Response" button below the message
+4. Watch the verification process with streaming status updates
+5. View the results:
+   - **Risk Score** (Lower is better): 0-100, indicates manipulation risk
+   - **Reliability Score** (Higher is better): 0-100, indicates factual reliability
+   - **Detected Issues**: List of manipulation patterns found
+   - **Suggestions**: Follow-up prompts to improve the response
 
-1. **Navigate to ChatGPT or Claude**
-   - Visit [ChatGPT](https://chat.openai.com) or [Claude](https://claude.ai)
+### Improving Prompts
 
-2. **Sidebar Appears**
-   - The Manipulation Radar sidebar appears on the right side by default
-   - Shows trust score and recent flags in real-time
+**While Typing:**
+1. Start typing in the input field
+2. After 2-3 characters, a "✨ Improve Prompt" suggestion appears
+3. Click it to get an improved version
+4. Insert directly into the input or copy to clipboard
 
-3. **Interact with the Sidebar**
-   - **Collapse**: Click the X button in the header to collapse to icon
-   - **Expand**: Click the icon button to expand the sidebar
-   - **Reposition**: Drag the icon vertically to your preferred position
-   - **View Details**: Click "Details" to see statistics
+**After Sending:**
+1. Send your message
+2. Click "✨ Improve Prompt" below your message
+3. View the improved prompt with explanations
+4. Copy or use the improved version
 
-4. **Monitor Conversations**
-   - As you chat with AI, responses are automatically analyzed
-   - Trust scores update in real-time
-   - Manipulation flags appear in the Recent Flags section
+### Sidebar
 
-### Settings
+- **Expand/Collapse**: Click the icon on the right edge to expand or collapse
+- **Drag Icon**: When collapsed, drag the icon to reposition vertically
+- **View History**: See all your verifications in the sidebar
+- **Details**: Expand the "Details" section for statistics
 
-Click the extension icon in Chrome's toolbar to access settings:
-- **Extension Status**: Enable/disable monitoring
-- **Detection Sensitivity**: Adjust between Low, Medium, and High
+## Technical Architecture
 
----
+### Frontend
+- **React 18** with Vite for modern UI
+- **Tailwind CSS** for styling
+- **Framer Motion** for animations
+- **Chrome Extension Manifest V3**
+- **Content Scripts** for DOM observation and injection
+- **Service Worker** for background tasks
 
-## 🛠️ Technical Stack
+### Backend
+- **Supabase Edge Functions** (Deno runtime)
+- **Azure AI Foundry** for AI analysis
+- **PostgreSQL** for rate limiting, caching, and event logging
+- **RESTful API** design
 
-| Category | Technology |
-|----------|-----------|
-| **Frontend Framework** | React 18 |
-| **Build Tool** | Vite 5 |
-| **Styling** | Tailwind CSS 3 |
-| **Animations** | Framer Motion 10 |
-| **Extension Framework** | Chrome Extension Manifest V3 |
-| **Build Plugin** | @crxjs/vite-plugin |
-| **Detection Engine** | Pattern-based (Regex) |
+### Key Components
 
----
+#### Content Script (`src/content/content.js`)
+- Observes DOM for new messages
+- Injects UI elements (buttons, verification UI)
+- Manages lock state and heartbeat
+- Handles verification and prompt improvement flows
 
-## 🔧 Current Implementation
+#### Sidebar (`src/content/Sidebar.jsx`)
+- React component for the sidebar UI
+- Displays verification history
+- Shows locked mode when inactive
+- Collapsible with draggable icon
 
-### Detection System
-- **Client-Side Pattern Detection**: Uses regex patterns to identify manipulation techniques
-- **Real-Time DOM Monitoring**: Observes page changes to detect new AI messages
-- **5 Detection Categories**:
-  - 🔄 **Sycophancy**: Excessive agreement and validation
-  - 💬 **Flattery**: Excessive praise and compliments
-  - 🎯 **Persuasion**: Manipulative language and pressure tactics
-  - 😢 **Emotional Manipulation**: Guilt-tripping and emotional appeals
-  - 👔 **Authority Appeals**: False expertise claims
+#### Background Service Worker (`src/background/background.js`)
+- Manages single-active-tab lock system
+- Handles lock requests, takeovers, and cleanup
+- Tracks active tab across all windows
 
-### UI Components
-- **Collapsible Sidebar**: React component with Framer Motion animations
-- **Settings Popup**: Configuration interface with Chrome storage integration
-- **Service Worker**: Background script for extension lifecycle management
+#### Edge Functions
+- **verify-manipulation**: Analyzes AI responses for manipulation and reliability
+- **improve-prompt**: Refines user prompts to be more neutral and evidence-seeking
 
-### State Management
-- **Chrome Storage API**: Persists user preferences
-- **Local Storage**: Remembers sidebar state and icon position
-- **Real-Time Updates**: React state updates on new message detection
+## Analysis Categories
 
----
+### Manipulation Detection
+1. **Sycophancy** (Medium): Excessive agreement, validation-seeking language
+2. **Flattery** (Medium): Excessive praise, compliments, admiration
+3. **Persuasion** (High): Manipulative language, pressure tactics, urgency
+4. **Emotional** (High): Guilt-tripping, emotional manipulation, appeals to feelings
+5. **Authority** (Medium): Uncited claims like "studies show", "experts say" without evidence
 
-## 🚧 Future Enhancements
+### Reliability Assessment
+- **Uncited Authority Claims**: Penalty for claims without sources
+- **Vague/Unverifiable Claims**: Penalty for unclear statements
+- **Internal Contradictions**: Penalty for conflicting information
+- **Missing Reasoning**: Penalty for math/logic without step-by-step work
+- **Overconfident Language**: Penalty for certainty without evidence
 
-### Planned Features
+## Scoring System
 
-#### 🔮 Backend Integration
-- **Supabase Edge Functions**: Advanced AI-powered analysis
-- **Hybrid Detection**: Fast client-side + deep AI analysis for borderline cases
-- **Cloud Storage**: Sync settings across devices
+### Risk Score (0-100, Lower is Better)
+- Starts at 0
+- Weighted severity additions:
+  - Persuasion: 20 points per severity point
+  - Emotional: 20 points per severity point
+  - Sycophancy: 12 points per severity point
+  - Flattery: 10 points per severity point
+  - Authority: 12 points per severity point
+- **Risk Levels**:
+  - 0-24: Low
+  - 25-49: Medium
+  - 50-74: High
+  - 75-100: Critical
 
-#### 💡 Prompt Suggestions
-- **Better Prompts**: Help users write prompts that reduce manipulation
-- **Context-Aware Suggestions**: Based on detected patterns
-- **Prompt Templates**: Pre-built templates for common use cases
+### Reliability Score (0-100, Higher is Better)
+- Starts at 100
+- Penalties subtracted:
+  - Uncited authority: -10 to -25
+  - Vague/unverifiable: -5 to -20
+  - Contradictions: -10 to -30
+  - Missing math/logic steps: -5 to -20
+- **Reliability Levels**:
+  - 90-100: High
+  - 70-89: Caution
+  - 50-69: Low
+  - <50: Unreliable
 
-#### 📈 Enhanced Analytics
-- **Historical Trends**: Track trust scores over time
-- **Pattern Analysis**: Identify which manipulation types are most common
-- **Export Reports**: Generate reports of AI interactions
+## Rate Limiting & Caching
 
----
+- **Rate Limit**: 10 requests per minute per user
+- **Burst Protection**: Only 1 in-flight analysis per user at a time
+- **Caching**: Results cached for 6 hours by (user_id + message_id + sensitivity)
+- **Anonymous Access**: No authentication required (uses IP + user-agent for identification)
 
-## 📁 Project Structure
+## Browser Support
 
+- Chrome (Manifest V3)
+- Works on:
+  - `chat.openai.com`
+  - `chatgpt.com`
+  - `claude.ai`
+
+## Development
+
+### Project Structure
 ```
 ManipulationRadar/
 ├── src/
 │   ├── background/          # Service worker
-│   │   └── background.js
-│   ├── content/            # Content scripts
-│   │   ├── content.js      # Main content script
-│   │   ├── Sidebar.jsx     # Collapsible sidebar component
-│   │   └── content.css     # Content styles
-│   ├── lib/                # Core logic
-│   │   ├── detectors.js    # Pattern matching engine
-│   │   └── scorer.js       # Trust score calculator
-│   ├── popup/              # Extension popup
-│   │   ├── Popup.jsx       # Settings component
-│   │   ├── popup.jsx       # Entry point
-│   │   └── popup.html      # Popup HTML
-│   └── styles.css          # Global styles
-├── icons/                  # Extension icons
-├── manifest.json           # Chrome extension manifest
-├── vite.config.js          # Vite configuration
-├── tailwind.config.js      # Tailwind CSS config
-├── package.json            # Dependencies
-└── README.md               # This file
+│   ├── content/             # Content scripts and sidebar
+│   ├── popup/               # Extension popup
+│   ├── lib/                 # Detection and scoring logic
+│   └── config/              # Configuration files
+├── supabase/
+│   ├── functions/           # Edge Functions
+│   │   ├── verify-manipulation/
+│   │   └── improve-prompt/
+│   └── migrations/          # Database migrations
+├── icons/                   # Extension icons
+├── manifest.json            # Extension manifest
+└── vite.config.js          # Vite configuration
 ```
 
----
-
-## 💻 Development
-
-### Development Mode
-
-Run the development server with hot reload:
-
+### Build Commands
 ```bash
+# Development build
 npm run dev
-```
 
-The extension will automatically reload when you make changes.
-
-### Build for Production
-
-```bash
+# Production build
 npm run build
+
+# Deploy Supabase functions
+supabase functions deploy verify-manipulation
+supabase functions deploy improve-prompt
 ```
 
-This creates an optimized production build in the `dist` folder.
+## Privacy & Security
 
-### Project Scripts
+- **No Authentication Required**: Extension works anonymously
+- **No Data Storage**: Verification results are not stored (unless explicitly enabled)
+- **Rate Limited**: Prevents abuse and controls costs
+- **CORS Protected**: Backend validates all requests
+- **Secure Secrets**: API keys stored server-side only
 
-```bash
-npm run dev      # Start development server
-npm run build    # Build for production
-npm run preview  # Preview production build
-```
+## Future Enhancements
 
----
+- [ ] User authentication for persistent history
+- [ ] Export verification reports
+- [ ] Custom sensitivity settings
+- [ ] Browser extension for Firefox
+- [ ] Real-time manipulation alerts
+- [ ] Integration with more AI platforms
 
-## 🎨 Design Philosophy
-
-Manipulation Radar is designed with the following principles:
-
-- **Non-Intrusive**: Collapsible sidebar that doesn't interfere with normal browsing
-- **Real-Time**: Instant feedback as AI responses appear
-- **Transparent**: Clear trust scores and detailed flag explanations
-- **Customizable**: User-controlled positioning and sensitivity settings
-- **Performant**: Lightweight client-side detection for fast analysis
-
----
-
-## 📊 Use Case
-
-**Manipulation Radar** helps users:
-
-- ✅ **Identify Manipulation**: Recognize when AI uses manipulative language
-- ✅ **Make Informed Decisions**: Understand the trustworthiness of AI responses
-- ✅ **Improve Interactions**: Learn to write better prompts that reduce manipulation
-- ✅ **Stay Aware**: Maintain awareness of AI behavior patterns
-
-Perfect for:
-- Researchers studying AI behavior
-- Users who want transparent AI interactions
-- Educators teaching about AI ethics
-- Anyone concerned about AI manipulation
-
----
-
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
-### Development Setup
+## License
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes
-4. Test thoroughly
-5. Commit your changes (`git commit -m 'Add amazing feature'`)
-6. Push to the branch (`git push origin feature/amazing-feature`)
-7. Open a Pull Request
+MIT License - see LICENSE file for details
+
+## Support
+
+For issues, questions, or feature requests, please open an issue on GitHub.
 
 ---
 
-## 📝 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
----
-
-## 🙏 Acknowledgments
-
-- Built with [React](https://reactjs.org/) and [Vite](https://vitejs.dev/)
-- Styled with [Tailwind CSS](https://tailwindcss.com/)
-- Animated with [Framer Motion](https://www.framer.com/motion/)
-- Extension built with [@crxjs/vite-plugin](https://github.com/crxjs/chrome-extension-tools)
-
----
-
-<div align="center">
-
-**Made with ❤️ for transparent AI interactions**
-
-[Report Bug](https://github.com/your-repo/issues) · [Request Feature](https://github.com/your-repo/issues) · [Documentation](https://github.com/your-repo/wiki)
-
-</div>
+**Built with ❤️ to help users have more informed AI interactions**
