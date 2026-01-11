@@ -23,17 +23,17 @@ AI assistants like ChatGPT and Claude can sometimes use manipulative language te
 
 ### 📸 Screenshot: Sidebar Dashboard
 
-![Sidebar Dashboard](docs/screenshots/sidebar-dashboard.png)
+![Sidebar Dashboard](docs/screenshots/sidebar.png)
 *The sidebar shows verification history, online status, and detailed statistics*
 
 ### 📸 Screenshot: Verification Results
 
-![Verification Results](docs/screenshots/verification-results.png)
+![Verification Results](docs/screenshots/verification.png)
 *Click "🔍 Verify Response" to see risk scores, reliability scores, and detected issues*
 
 ### 📸 Screenshot: Prompt Improvement
 
-![Prompt Improvement](docs/screenshots/prompt-improvement.png)
+![Prompt Improvement](docs/screenshots/improve_prompt.png)
 *Get AI-powered suggestions to improve your prompts while typing or after sending*
 
 ---
