@@ -1,8 +1,9 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import Sidebar from './Sidebar.jsx';
-import { detectManipulation } from '../lib/detectors.js';
-import { calculateTrustScore } from '../lib/scorer.js';
+// Keep imports for future backend use, but don't call automatically
+// import { detectManipulation } from '../lib/detectors.js';
+// import { calculateTrustScore } from '../lib/scorer.js';
 import '../styles.css';
 import './content.css';
 
@@ -46,6 +47,8 @@ function createSidebar() {
       trustScore: currentTrustScore,
       recentFlags: recentFlags,
       messageHistory: messageHistory,
+      lockState: lockState,
+      onTakeover: handleTakeover,
     });
     
     sidebarRoot.render(sidebarElement);
@@ -81,12 +84,282 @@ let recentFlags = [];
 let selectedMessage = null;
 let messageDataMap = new Map(); // Map message elements to their data
 
+// Lock state management
+let lockState = {
+  isActive: false,
+  ownerTabId: null,
+  ownerUrl: null,
+  since: null,
+};
+let heartbeatInterval = null;
+let userMessageObserver = null; // Track separately for cleanup
+
+// Verification state management
+let verificationStates = new Map(); // Track verification state per message: "not_verified" | "verifying" | "verified"
+let verifiedMessages = new Map(); // Store verification results per message ID
+
 // Observer for chat messages
 let messageObserver = null;
 let inputObserver = null;
 let promptSuggestionCard = null;
 let typingTimeout = null;
 let processedInputs = new WeakSet(); // Track inputs that already have listeners
+
+/**
+ * Detect platform from URL
+ * @param {string} url - URL to check
+ * @returns {string|null} - "chatgpt", "claude", or null
+ */
+function detectPlatform(url) {
+  if (!url) url = window.location.href;
+  if (url.includes('chat.openai.com') || url.includes('chatgpt.com')) {
+    return 'chatgpt';
+  }
+  if (url.includes('claude.ai')) {
+    return 'claude';
+  }
+  return null;
+}
+
+/**
+ * Request lock from background service worker
+ * @returns {Promise<boolean>} - True if lock was granted
+ */
+async function requestLock() {
+  const platform = detectPlatform();
+  if (!platform) {
+    console.warn('Manipulation Radar: Unsupported platform');
+    return false;
+  }
+
+  try {
+    const response = await new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage(
+        {
+          type: 'LOCK_REQUEST',
+          platform,
+          url: window.location.href,
+        },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+          } else {
+            resolve(response);
+          }
+        }
+      );
+    });
+
+    if (response.granted) {
+      lockState.isActive = true;
+      lockState.ownerTabId = response.ownerTabId;
+      console.log('Manipulation Radar: Lock granted');
+      return true;
+    } else {
+      lockState.isActive = false;
+      lockState.ownerTabId = response.ownerTabId;
+      lockState.ownerUrl = response.ownerUrl;
+      lockState.since = response.since;
+      console.log('Manipulation Radar: Lock denied - active in tab', response.ownerTabId);
+      return false;
+    }
+  } catch (error) {
+    console.error('Manipulation Radar: Error requesting lock', error);
+    lockState.isActive = false;
+    return false;
+  }
+}
+
+/**
+ * Start heartbeat to keep lock alive
+ */
+function startHeartbeat() {
+  // Clear existing heartbeat if any
+  if (heartbeatInterval) {
+    clearInterval(heartbeatInterval);
+  }
+
+  const platform = detectPlatform();
+  if (!platform) return;
+
+  heartbeatInterval = setInterval(() => {
+    // Only send heartbeat if tab is visible
+    if (document.visibilityState === 'visible' && lockState.isActive) {
+      chrome.runtime.sendMessage(
+        {
+          type: 'LOCK_HEARTBEAT',
+          platform,
+          url: window.location.href,
+        },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            console.error('Manipulation Radar: Heartbeat error', chrome.runtime.lastError);
+          } else if (response && !response.accepted) {
+            // Lock was revoked
+            console.log('Manipulation Radar: Heartbeat not accepted, lock may be revoked');
+            handleLockRevoked();
+          }
+        }
+      );
+    }
+  }, 30000); // 30 seconds
+}
+
+/**
+ * Stop all analysis and observers
+ */
+function stopAnalysis() {
+  console.log('Manipulation Radar: Stopping analysis');
+
+  // Stop all observers
+  if (messageObserver) {
+    messageObserver.disconnect();
+    messageObserver = null;
+  }
+
+  if (userMessageObserver) {
+    userMessageObserver.disconnect();
+    userMessageObserver = null;
+  }
+
+  if (inputObserver) {
+    inputObserver.disconnect();
+    inputObserver = null;
+  }
+
+  // Clear heartbeat
+  if (heartbeatInterval) {
+    clearInterval(heartbeatInterval);
+    heartbeatInterval = null;
+  }
+
+  // Clear typing timeout
+  if (typingTimeout) {
+    clearTimeout(typingTimeout);
+    typingTimeout = null;
+  }
+
+  // Remove prompt suggestion card
+  if (promptSuggestionCard) {
+    if (promptSuggestionCard._cleanup) promptSuggestionCard._cleanup();
+    promptSuggestionCard.remove();
+    promptSuggestionCard = null;
+  }
+
+  // Update lock state
+  lockState.isActive = false;
+
+  // Update sidebar to show locked mode
+  updateSidebar();
+}
+
+/**
+ * Handle lock takeover request
+ */
+async function handleTakeover() {
+  const platform = detectPlatform();
+  if (!platform) {
+    console.warn('Manipulation Radar: Cannot takeover - unsupported platform');
+    return;
+  }
+
+  try {
+    const response = await new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage(
+        {
+          type: 'LOCK_TAKEOVER',
+          platform,
+          url: window.location.href,
+        },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+          } else {
+            resolve(response);
+          }
+        }
+      );
+    });
+
+    if (response.granted) {
+      // Update lock state
+      lockState.isActive = true;
+      lockState.ownerTabId = null; // We own it now
+      lockState.ownerUrl = null;
+      lockState.since = null;
+      console.log('Manipulation Radar: Lock taken over successfully');
+      
+      // Update sidebar to show active state
+      updateSidebar();
+      
+      // Start analysis (this will check lockState.isActive internally)
+      startAnalysis();
+    } else {
+      console.error('Manipulation Radar: Takeover failed', response.error);
+      // Re-request lock to get updated state
+      await requestLock();
+      // Update sidebar to show current state
+      updateSidebar();
+    }
+  } catch (error) {
+    console.error('Manipulation Radar: Error during takeover', error);
+    // On error, try to refresh lock state
+    try {
+      await requestLock();
+      updateSidebar();
+    } catch (refreshError) {
+      console.error('Manipulation Radar: Error refreshing lock state', refreshError);
+    }
+  }
+}
+
+/**
+ * Handle lock revoked message
+ */
+function handleLockRevoked() {
+  console.log('Manipulation Radar: Lock revoked');
+  // Update lock state to reflect revoked status
+  lockState.isActive = false;
+  lockState.ownerTabId = null;
+  lockState.ownerUrl = null;
+  lockState.since = null;
+  stopAnalysis();
+  // Sidebar will be updated by stopAnalysis() which calls updateSidebar()
+}
+
+/**
+ * Start analysis (observers and heartbeat)
+ */
+function startAnalysis() {
+  if (!lockState.isActive) {
+    console.warn('Manipulation Radar: Cannot start analysis - lock not active');
+    return;
+  }
+
+  console.log('Manipulation Radar: Starting analysis');
+  
+  // Stop any existing observers first to avoid duplicates
+  if (messageObserver) {
+    messageObserver.disconnect();
+    messageObserver = null;
+  }
+  if (userMessageObserver) {
+    userMessageObserver.disconnect();
+    userMessageObserver = null;
+  }
+  if (inputObserver) {
+    inputObserver.disconnect();
+    inputObserver = null;
+  }
+  
+  // Start observers
+  observeMessages();
+  observeUserMessages();
+  observeInputFields();
+  
+  // Start heartbeat
+  startHeartbeat();
+}
 
 // Helper function to get score color class
 function getScoreColorClass(score) {
@@ -96,12 +369,258 @@ function getScoreColorClass(score) {
   return '#f87171'; // red-400
 }
 
-// Helper function to get score background color
+// Helper function to get score background color (kept for potential future use)
 function getScoreBgColorClass(score) {
   if (score >= 90) return 'rgba(34, 197, 94, 0.2)'; // green-500/20
   if (score >= 70) return 'rgba(234, 179, 8, 0.2)'; // yellow-500/20
   if (score >= 50) return 'rgba(249, 115, 22, 0.2)'; // orange-500/20
   return 'rgba(239, 68, 68, 0.2)'; // red-500/20
+}
+
+/**
+ * Placeholder function for future backend integration
+ * @param {string} messageId - Unique message ID
+ * @param {string} messageText - Message text to verify
+ * @returns {Promise<{success: boolean, message: string, score: number|null, flags: Array}>}
+ */
+async function verifyMessage(messageId, messageText) {
+  // For now: Return static success result
+  // Later: Call backend API
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      resolve({
+        success: true,
+        message: "No issues found - You can trust this response",
+        score: null, // Will be populated by backend
+        flags: [] // Will be populated by backend
+      });
+    }, 100); // Small delay to simulate async
+  });
+}
+
+/**
+ * Inject "Verify Response" button below AI message
+ * @param {HTMLElement} messageEl - Message element
+ * @param {string} messageText - Message text
+ * @param {string} messageId - Unique message ID
+ */
+function injectVerifyButton(messageEl, messageText, messageId) {
+  // Check if button already exists
+  const existingButton = messageEl.querySelector('.manipulation-radar-verify-btn');
+  if (existingButton) {
+    return; // Button already exists
+  }
+
+  // Check if verification UI already exists
+  const existingVerification = messageEl.querySelector('.manipulation-radar-verification-process');
+  if (existingVerification) {
+    return; // Verification already in progress or completed
+  }
+
+  // Create button element
+  const button = document.createElement('button');
+  button.className = 'manipulation-radar-verify-btn';
+  button.textContent = '🔍 Verify Response';
+  button.setAttribute('data-message-id', messageId);
+  
+  // Click handler
+  button.onclick = (e) => {
+    e.stopPropagation();
+    const state = verificationStates.get(messageId);
+    if (state === 'verifying') {
+      return; // Already verifying
+    }
+    showVerificationProcess(messageId, messageText, messageEl);
+  };
+
+  // Find the best place to insert the button
+  const messageContent = messageEl.querySelector('[data-message-content]') || 
+                         messageEl.querySelector('.markdown') ||
+                         messageEl.querySelector('.prose') ||
+                         messageEl;
+  
+  // Insert after the message content or at the end of the message element
+  if (messageContent && messageContent !== messageEl) {
+    messageContent.parentNode.insertBefore(button, messageContent.nextSibling);
+  } else {
+    messageEl.appendChild(button);
+  }
+}
+
+/**
+ * Show verification process with streaming animation
+ * @param {string} messageId - Unique message ID
+ * @param {string} messageText - Message text to verify
+ * @param {HTMLElement} messageEl - Message element
+ */
+async function showVerificationProcess(messageId, messageText, messageEl) {
+  // Check if already verifying or verified
+  const currentState = verificationStates.get(messageId);
+  if (currentState === 'verifying') {
+    return; // Already verifying
+  }
+
+  // Check if already verified - show cached result
+  if (currentState === 'verified' && verifiedMessages.has(messageId)) {
+    const result = verifiedMessages.get(messageId);
+    showVerificationResult(messageId, messageText, messageEl, result);
+    return;
+  }
+
+  // Set state to verifying
+  verificationStates.set(messageId, 'verifying');
+
+  // Find button to update
+  const button = messageEl.querySelector(`.manipulation-radar-verify-btn[data-message-id="${messageId}"]`);
+  if (button) {
+    button.disabled = true;
+    button.textContent = '⏳ Verifying...';
+  }
+
+  // Create verification UI container
+  const verificationContainer = document.createElement('div');
+  verificationContainer.className = 'manipulation-radar-verification-process';
+  verificationContainer.setAttribute('data-message-id', messageId);
+
+  // Create single step display (replaces previous line)
+  const stepDisplay = document.createElement('div');
+  stepDisplay.className = 'manipulation-radar-verification-step';
+
+  // Create spinner
+  const spinner = document.createElement('div');
+  spinner.className = 'manipulation-radar-verification-spinner';
+  verificationContainer.appendChild(spinner);
+  verificationContainer.appendChild(stepDisplay);
+
+  // Insert verification UI after button
+  if (button && button.nextSibling) {
+    button.parentNode.insertBefore(verificationContainer, button.nextSibling);
+  } else if (button) {
+    button.parentNode.appendChild(verificationContainer);
+  } else {
+    // Fallback: insert after message content
+    const messageContent = messageEl.querySelector('[data-message-content]') || 
+                           messageEl.querySelector('.markdown') ||
+                           messageEl.querySelector('.prose') ||
+                           messageEl;
+    if (messageContent && messageContent !== messageEl) {
+      messageContent.parentNode.insertBefore(verificationContainer, messageContent.nextSibling);
+    } else {
+      messageEl.appendChild(verificationContainer);
+    }
+  }
+
+  // Verification steps
+  const verificationSteps = [
+    "Checking for manipulation patterns...",
+    "Analyzing language for sycophancy...",
+    "Checking for flattery and persuasion...",
+    "Scanning for emotional manipulation...",
+    "Verifying factual accuracy...",
+    "Finalizing analysis..."
+  ];
+
+  // Stream steps one at a time (replacing previous line)
+  for (let i = 0; i < verificationSteps.length; i++) {
+    await new Promise(resolve => setTimeout(resolve, i === 0 ? 500 : 600 + (i * 100)));
+    
+    // Update the single step display (replaces previous text)
+    stepDisplay.textContent = verificationSteps[i];
+  }
+
+  // Call verification function (placeholder for now)
+  const result = await verifyMessage(messageId, messageText);
+
+  // Store result
+  verifiedMessages.set(messageId, result);
+  verificationStates.set(messageId, 'verified');
+
+  // Remove spinner and step display, show result
+  spinner.remove();
+  stepDisplay.remove();
+  
+  // Show result
+  showVerificationResult(messageId, messageText, messageEl, result, verificationContainer);
+}
+
+/**
+ * Show verification result
+ * @param {string} messageId - Unique message ID
+ * @param {string} messageText - Message text
+ * @param {HTMLElement} messageEl - Message element
+ * @param {Object} result - Verification result
+ * @param {HTMLElement} container - Existing container or null
+ */
+function showVerificationResult(messageId, messageText, messageEl, result, container = null) {
+  // Remove existing result if any
+  const existingResult = messageEl.querySelector(`.manipulation-radar-verification-result[data-message-id="${messageId}"]`);
+  if (existingResult) {
+    existingResult.remove();
+  }
+
+  // Use existing container or create new one
+  if (!container) {
+    container = messageEl.querySelector(`.manipulation-radar-verification-process[data-message-id="${messageId}"]`);
+    if (!container) {
+      container = document.createElement('div');
+      container.className = 'manipulation-radar-verification-process';
+      container.setAttribute('data-message-id', messageId);
+      
+      const button = messageEl.querySelector(`.manipulation-radar-verify-btn[data-message-id="${messageId}"]`);
+      if (button && button.nextSibling) {
+        button.parentNode.insertBefore(container, button.nextSibling);
+      } else if (button) {
+        button.parentNode.appendChild(container);
+      }
+    }
+  }
+
+  // Create result element
+  const resultEl = document.createElement('div');
+  resultEl.className = 'manipulation-radar-verification-result';
+  resultEl.setAttribute('data-message-id', messageId);
+
+  // Create result content
+  const resultContent = document.createElement('div');
+  resultContent.className = 'manipulation-radar-verification-result-content';
+  
+  const checkmark = document.createElement('span');
+  checkmark.textContent = '✓';
+  checkmark.className = 'manipulation-radar-verification-checkmark';
+  
+  const message = document.createElement('span');
+  message.textContent = result.message || 'No issues found - You can trust this response';
+  message.className = 'manipulation-radar-verification-message';
+  
+  resultContent.appendChild(checkmark);
+  resultContent.appendChild(message);
+  resultEl.appendChild(resultContent);
+
+  // Add close button
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'manipulation-radar-verification-close';
+  closeBtn.innerHTML = '×';
+  closeBtn.onclick = (e) => {
+    e.stopPropagation();
+    container.remove();
+    // Reset button state
+    const button = messageEl.querySelector(`.manipulation-radar-verify-btn[data-message-id="${messageId}"]`);
+    if (button) {
+      button.disabled = false;
+      button.textContent = '🔍 Verify Response';
+    }
+  };
+  resultEl.appendChild(closeBtn);
+
+  container.appendChild(resultEl);
+
+  // Update button state
+  const button = messageEl.querySelector(`.manipulation-radar-verify-btn[data-message-id="${messageId}"]`);
+  if (button) {
+    button.disabled = false;
+    button.textContent = '✓ Verified';
+    button.style.opacity = '0.7';
+  }
 }
 
 // Inject score badge below AI message
@@ -237,7 +756,7 @@ function injectScoreBadge(messageEl, messageData) {
   messageDataMap.set(messageId, messageData);
 }
 
-// Handle badge click - open sidebar with message details
+// Handle badge click - open sidebar with message details (DEPRECATED - kept for reference)
 function handleBadgeClick(messageData) {
   selectedMessage = messageData;
   
@@ -377,6 +896,12 @@ function showPromptSuggestion(inputEl) {
 }
 
 function observeMessages() {
+  // Only observe if lock is active
+  if (!lockState.isActive) {
+    console.log('Manipulation Radar: Skipping observeMessages - lock not active');
+    return;
+  }
+
   // Different selectors for ChatGPT and Claude
   const chatSelectors = [
     // ChatGPT selectors
@@ -406,43 +931,25 @@ function observeMessages() {
           lastProcessedMessage = textContent;
           messageEl.dataset.processed = 'true';
 
-          // Analyze message
-          const score = calculateTrustScore(textContent);
-          const { flags } = detectManipulation(textContent);
-
-          // Update state
-          currentTrustScore = score;
+          // Create message ID
+          const messageId = `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
           
-          // Add new flags to recent flags (keep last 10)
-          if (flags.length > 0) {
-            flags.forEach(flag => {
-              recentFlags.unshift({
-                ...flag,
-                timestamp: Date.now(),
-                message: textContent.substring(0, 100) + '...',
-              });
-            });
-            recentFlags = recentFlags.slice(0, 10);
-          }
-
-          // Create message data object
+          // Create message data object (without analysis)
           const messageData = {
             text: textContent,
-            score,
-            flags,
             timestamp: Date.now(),
-            id: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            id: messageId,
           };
 
-          // Add to message history
+          // Add to message history (without scores/flags)
           messageHistory.unshift(messageData);
           messageHistory = messageHistory.slice(0, 50); // Keep last 50 messages
 
-          // Inject score badge
-          injectScoreBadge(messageEl, messageData);
+          // Initialize verification state
+          verificationStates.set(messageId, 'not_verified');
 
-          // Update sidebar
-          updateSidebar();
+          // Inject verify button instead of score badge
+          injectVerifyButton(messageEl, textContent, messageId);
         }
       });
     }
@@ -512,6 +1019,11 @@ function observeUserMessages() {
 
 // Observe input fields for typing detection
 function observeInputFields() {
+  // Only observe if lock is active
+  if (!lockState.isActive) {
+    console.log('Manipulation Radar: Skipping observeInputFields - lock not active');
+    return;
+  }
   const inputSelectors = [
     'textarea[data-id]',
     '#prompt-textarea',
@@ -615,12 +1127,24 @@ function updateSidebar() {
           selectedMessage = null;
           updateSidebar();
         },
+        lockState: lockState,
+        onTakeover: handleTakeover,
       })
     );
   }
 }
 
 // Initialize when page loads
+// Listen for lock revocation messages
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'LOCK_REVOKED') {
+    console.log('Manipulation Radar: Received LOCK_REVOKED message');
+    handleLockRevoked();
+    sendResponse({ received: true });
+  }
+  return true;
+});
+
 function init() {
   console.log('Manipulation Radar: Initializing...', {
     readyState: document.readyState,
@@ -628,7 +1152,7 @@ function init() {
   });
   
   // Wait for page to be ready
-  const initialize = () => {
+  const initialize = async () => {
     try {
       if (!document.body) {
         console.log('Manipulation Radar: Waiting for body...');
@@ -636,10 +1160,22 @@ function init() {
         return;
       }
       console.log('Manipulation Radar: Body found, creating sidebar...');
+      
+      // Request lock before creating sidebar
+      const lockGranted = await requestLock();
+      
+      // Create sidebar with correct lock state
       createSidebar();
-      observeMessages();
-      observeUserMessages();
-      observeInputFields();
+      
+      if (lockGranted) {
+        // Lock granted - start analysis
+        startAnalysis();
+      } else {
+        // Lock denied - show locked mode UI
+        console.log('Manipulation Radar: Lock denied, showing locked mode');
+        // Sidebar already created with lock state, just ensure it's updated
+        updateSidebar();
+      }
     } catch (error) {
       console.error('Manipulation Radar: Initialization error', error);
       console.error('Error stack:', error.stack);
@@ -666,10 +1202,19 @@ new MutationObserver(() => {
   const url = location.href;
   if (url !== lastUrl) {
     lastUrl = url;
-    setTimeout(() => {
+    setTimeout(async () => {
       if (!sidebarContainer) {
         createSidebar();
-        observeMessages();
+        // Re-request lock on navigation (lock persists if still on supported site)
+        const platform = detectPlatform();
+        if (platform) {
+          const lockGranted = await requestLock();
+          if (lockGranted) {
+            startAnalysis();
+          } else {
+            updateSidebar();
+          }
+        }
       }
     }, 1000);
   }

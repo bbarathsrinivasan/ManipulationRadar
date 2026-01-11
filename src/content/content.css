@@ -108,3 +108,167 @@ body {
   box-shadow: 0 12px 40px rgba(37, 99, 235, 0.3), 
               inset 0 1px 0 rgba(255, 255, 255, 0.15) !important;
 }
+
+/* Verify Response Button Styles - Glassmorphism */
+.manipulation-radar-verify-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  padding: 6px 14px !important;
+  margin-top: 6px !important;
+  margin-bottom: 6px !important;
+  background: rgba(59, 130, 246, 0.15) !important;
+  backdrop-filter: blur(12px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(12px) saturate(180%) !important;
+  color: #60a5fa !important;
+  border: 1px solid rgba(96, 165, 250, 0.3) !important;
+  border-radius: 16px !important;
+  cursor: pointer !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif !important;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  z-index: 1000 !important;
+  user-select: none !important;
+  box-shadow: 0 4px 16px rgba(59, 130, 246, 0.2), 
+              inset 0 1px 0 rgba(255, 255, 255, 0.1) !important;
+}
+
+.manipulation-radar-verify-btn:hover:not(:disabled) {
+  background: rgba(59, 130, 246, 0.25) !important;
+  border-color: rgba(96, 165, 250, 0.5) !important;
+  color: #93c5fd !important;
+  transform: translateY(-1px) scale(1.02) !important;
+  box-shadow: 0 6px 24px rgba(59, 130, 246, 0.3), 
+              inset 0 1px 0 rgba(255, 255, 255, 0.15) !important;
+}
+
+.manipulation-radar-verify-btn:disabled {
+  opacity: 0.7 !important;
+  cursor: not-allowed !important;
+}
+
+.manipulation-radar-verify-btn:active:not(:disabled) {
+  transform: translateY(0) scale(0.98) !important;
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.2), 
+              inset 0 1px 0 rgba(255, 255, 255, 0.1) !important;
+}
+
+/* Verification Process Container */
+.manipulation-radar-verification-process {
+  margin-top: 8px !important;
+  margin-bottom: 8px !important;
+  padding: 16px !important;
+  background: rgba(31, 41, 55, 0.8) !important;
+  backdrop-filter: blur(16px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(16px) saturate(180%) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 16px !important;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3), 
+              inset 0 1px 0 rgba(255, 255, 255, 0.1) !important;
+  position: relative !important;
+}
+
+/* Verification Steps Container (not used anymore, but kept for compatibility) */
+.manipulation-radar-verification-steps {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 8px !important;
+  margin-top: 12px !important;
+}
+
+/* Individual Verification Step - Single line that replaces previous */
+.manipulation-radar-verification-step {
+  color: #e5e7eb !important;
+  font-size: 13px !important;
+  padding: 8px 0 !important;
+  margin-top: 12px !important;
+  min-height: 20px !important;
+  text-align: center !important;
+  animation: fadeIn 0.3s ease-in !important;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Verification Spinner */
+.manipulation-radar-verification-spinner {
+  width: 24px !important;
+  height: 24px !important;
+  border: 3px solid rgba(96, 165, 250, 0.3) !important;
+  border-top-color: #60a5fa !important;
+  border-radius: 50% !important;
+  animation: spin 1s linear infinite !important;
+  margin: 0 auto 12px !important;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Verification Result */
+.manipulation-radar-verification-result {
+  position: relative !important;
+  padding: 12px !important;
+  background: rgba(34, 197, 94, 0.15) !important;
+  border: 1px solid rgba(74, 222, 128, 0.3) !important;
+  border-radius: 12px !important;
+  margin-top: 8px !important;
+}
+
+.manipulation-radar-verification-result-content {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+}
+
+.manipulation-radar-verification-checkmark {
+  font-size: 20px !important;
+  color: #4ade80 !important;
+  font-weight: bold !important;
+  line-height: 1 !important;
+}
+
+.manipulation-radar-verification-message {
+  color: #86efac !important;
+  font-size: 14px !important;
+  font-weight: 500 !important;
+  flex: 1 !important;
+}
+
+/* Verification Close Button */
+.manipulation-radar-verification-close {
+  position: absolute !important;
+  top: 8px !important;
+  right: 8px !important;
+  width: 24px !important;
+  height: 24px !important;
+  border: none !important;
+  background: rgba(255, 255, 255, 0.1) !important;
+  color: #e5e7eb !important;
+  border-radius: 50% !important;
+  cursor: pointer !important;
+  font-size: 18px !important;
+  line-height: 1 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  transition: all 0.2s !important;
+  padding: 0 !important;
+}
+
+.manipulation-radar-verification-close:hover {
+  background: rgba(255, 255, 255, 0.2) !important;
+  transform: scale(1.1) !important;
+}

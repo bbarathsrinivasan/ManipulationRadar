@@ -5,7 +5,8 @@
   "description": "Detects AI manipulation in ChatGPT and Claude conversations",
   "permissions": [
     "storage",
-    "activeTab"
+    "activeTab",
+    "tabs"
   ],
   "host_permissions": [
     "https://chat.openai.com/*",

@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { getScoreColor, getScoreBgColor, getSeverityColor } from '../lib/scorer.js';
 import '../styles.css';
 
-function Sidebar({ trustScore = 100, recentFlags = [], messageHistory = [], selectedMessage = null, onBackToOverview = null }) {
+function Sidebar({ trustScore = 100, recentFlags = [], messageHistory = [], selectedMessage = null, onBackToOverview = null, lockState = { isActive: false, ownerTabId: null, ownerUrl: null, since: null }, onTakeover = null }) {
   const [isExpanded, setIsExpanded] = useState(() => {
     const saved = localStorage.getItem('manipulationRadarExpanded');
     return saved !== null ? JSON.parse(saved) : true; // Default to true (expanded)
@@ -73,6 +73,105 @@ function Sidebar({ trustScore = 100, recentFlags = [], messageHistory = [], sele
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
+  // Locked Mode View Component
+  const LockedModeView = () => {
+    if (lockState.isActive) return null;
+
+    const formatSince = (timestamp) => {
+      if (!timestamp) return 'Unknown';
+      const date = new Date(timestamp);
+      const now = Date.now();
+      const diff = now - timestamp;
+      const minutes = Math.floor(diff / 60000);
+      if (minutes < 1) return 'Just now';
+      if (minutes < 60) return `${minutes} minute${minutes > 1 ? 's' : ''} ago`;
+      const hours = Math.floor(minutes / 60);
+      if (hours < 24) return `${hours} hour${hours > 1 ? 's' : ''} ago`;
+      return date.toLocaleString();
+    };
+
+    return (
+      <div className="flex flex-col h-full">
+        {/* Header */}
+        <div className="p-4 border-b border-gray-700 flex items-center justify-between">
+          <div>
+            <h2 className="text-xl font-bold text-white mb-1">Manipulation Radar</h2>
+            <p className="text-xs text-gray-400">AI Trust Score Monitor</p>
+          </div>
+          <button
+            onClick={toggleExpanded}
+            className="w-8 h-8 flex items-center justify-center rounded hover:bg-gray-700 transition-colors p-1"
+            aria-label="Close sidebar"
+          >
+            <svg
+              className="w-5 h-5 text-gray-400"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M6 18L18 6M6 6l12 12"
+              />
+            </svg>
+          </button>
+        </div>
+
+        {/* Locked Mode Content */}
+        <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
+          <div className="mb-6">
+            <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-gray-800/50 backdrop-blur-sm border border-gray-700 flex items-center justify-center">
+              <svg
+                className="w-8 h-8 text-yellow-500"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+                />
+              </svg>
+            </div>
+            <h3 className="text-lg font-semibold text-white mb-2">Locked Mode</h3>
+            <p className="text-sm text-gray-400 mb-4">
+              Manipulation Radar is active in another tab
+            </p>
+          </div>
+
+          <div className="w-full space-y-3 mb-6">
+            {lockState.ownerUrl && (
+              <div className="bg-gray-800/50 backdrop-blur-sm border border-gray-700 rounded-lg p-3">
+                <div className="text-xs text-gray-400 mb-1">Active in:</div>
+                <div className="text-sm text-gray-300 break-all">{lockState.ownerUrl}</div>
+              </div>
+            )}
+
+            {lockState.since && (
+              <div className="bg-gray-800/50 backdrop-blur-sm border border-gray-700 rounded-lg p-3">
+                <div className="text-xs text-gray-400 mb-1">Since:</div>
+                <div className="text-sm text-gray-300">{formatSince(lockState.since)}</div>
+              </div>
+            )}
+          </div>
+
+          {onTakeover && (
+            <button
+              onClick={onTakeover}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors backdrop-blur-sm border border-blue-500/30"
+            >
+              Take Over
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   // Message Detail View Component
   const MessageDetailView = () => {
     if (!selectedMessage) return null;
@@ -103,27 +202,38 @@ function Sidebar({ trustScore = 100, recentFlags = [], messageHistory = [], sele
           </div>
         </div>
 
-        {/* Trust Score */}
-        <div className={`p-6 ${getScoreBgColor(selectedMessage.score)} border-b border-gray-700`}>
-          <div className="text-sm text-gray-400 mb-2">Trust Score</div>
-          <motion.div
-            key={selectedMessage.score}
-            initial={{ scale: 0.8, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            transition={{ duration: 0.3 }}
-            className={`text-6xl font-bold ${getScoreColor(selectedMessage.score)}`}
-          >
-            {selectedMessage.score}
-          </motion.div>
-          <div className="text-xs text-gray-400 mt-2">
-            {selectedMessage.score >= 90 && '✓ Highly Trustworthy'}
-            {selectedMessage.score >= 70 && selectedMessage.score < 90 && '⚠ Moderately Trustworthy'}
-            {selectedMessage.score >= 50 && selectedMessage.score < 70 && '⚠ Low Trust'}
-            {selectedMessage.score < 50 && '✗ High Risk'}
-          </div>
+        {/* Verification Status */}
+        <div className="p-6 bg-gray-800/50 border-b border-gray-700">
+          <div className="text-sm text-gray-400 mb-2">Verification Status</div>
+          {selectedMessage.score !== undefined ? (
+            <>
+              <motion.div
+                key={selectedMessage.score}
+                initial={{ scale: 0.8, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                transition={{ duration: 0.3 }}
+                className={`text-6xl font-bold ${getScoreColor(selectedMessage.score)}`}
+              >
+                {selectedMessage.score}
+              </motion.div>
+              <div className="text-xs text-gray-400 mt-2">
+                {selectedMessage.score >= 90 && '✓ Highly Trustworthy'}
+                {selectedMessage.score >= 70 && selectedMessage.score < 90 && '⚠ Moderately Trustworthy'}
+                {selectedMessage.score >= 50 && selectedMessage.score < 70 && '⚠ Low Trust'}
+                {selectedMessage.score < 50 && '✗ High Risk'}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="text-4xl font-bold text-gray-500 mb-2">N/A</div>
+              <div className="text-xs text-gray-400 mt-2">
+                Not verified yet
+              </div>
+            </>
+          )}
           {selectedMessage.timestamp && (
             <div className="text-xs text-gray-500 mt-2">
-              Analyzed: {formatTime(selectedMessage.timestamp)}
+              Message: {formatTime(selectedMessage.timestamp)}
             </div>
           )}
         </div>
@@ -136,7 +246,9 @@ function Sidebar({ trustScore = 100, recentFlags = [], messageHistory = [], sele
           
           {!selectedMessage.flags || selectedMessage.flags.length === 0 ? (
             <div className="text-sm text-gray-500 text-center py-8">
-              No manipulation flags detected
+              {selectedMessage.score === undefined 
+                ? 'Click "🔍 Verify Response" to analyze this message'
+                : 'No manipulation flags detected'}
             </div>
           ) : (
             <div className="space-y-3">
@@ -181,35 +293,25 @@ function Sidebar({ trustScore = 100, recentFlags = [], messageHistory = [], sele
   // Overview View Component (existing view)
   const OverviewView = () => (
     <>
-      {/* Trust Score Display */}
-      <div className={`p-6 ${getScoreBgColor(trustScore)} border-b border-gray-700`}>
-        <div className="text-sm text-gray-400 mb-2">Trust Score</div>
-        <motion.div
-          key={trustScore}
-          initial={{ scale: 0.8, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          transition={{ duration: 0.3 }}
-          className={`text-6xl font-bold ${getScoreColor(trustScore)}`}
-        >
-          {trustScore}
-        </motion.div>
+      {/* Trust Score Display - Updated for On-Demand Verification */}
+      <div className="p-6 bg-gray-800/50 border-b border-gray-700">
+        <div className="text-sm text-gray-400 mb-2">Verification Status</div>
+        <div className="text-4xl font-bold text-gray-500 mb-2">N/A</div>
         <div className="text-xs text-gray-400 mt-2">
-          {trustScore >= 90 && '✓ Highly Trustworthy'}
-          {trustScore >= 70 && trustScore < 90 && '⚠ Moderately Trustworthy'}
-          {trustScore >= 50 && trustScore < 70 && '⚠ Low Trust'}
-          {trustScore < 50 && '✗ High Risk'}
+          Click "Verify Response" on any AI message to analyze
         </div>
       </div>
 
-      {/* Recent Flags */}
+      {/* Recent Flags - Updated for Verification History */}
       <div className="flex-1 overflow-y-auto p-4">
         <div className="text-sm font-semibold text-gray-300 mb-3">
-          Recent Flags ({recentFlags.length})
+          Verification History
         </div>
         
         {recentFlags.length === 0 ? (
           <div className="text-sm text-gray-500 text-center py-8">
-            No manipulation detected
+            <div className="mb-2">No verifications yet.</div>
+            <div className="text-xs">Click "🔍 Verify Response" on any AI message to start.</div>
           </div>
         ) : (
           <div className="space-y-2">
@@ -332,8 +434,10 @@ function Sidebar({ trustScore = 100, recentFlags = [], messageHistory = [], sele
           className="pointer-events-auto h-full w-full bg-gray-900 text-white overflow-hidden flex flex-col fixed top-0 right-0"
           style={{ width: '320px', height: '100vh' }}
         >
-          {/* Conditional Rendering: Message Detail or Overview */}
-          {selectedMessage ? (
+          {/* Conditional Rendering: Locked Mode, Message Detail, or Overview */}
+          {!lockState.isActive ? (
+            <LockedModeView />
+          ) : selectedMessage ? (
             <MessageDetailView />
           ) : (
             <>
@@ -386,12 +490,32 @@ function Sidebar({ trustScore = 100, recentFlags = [], messageHistory = [], sele
             transform: 'translateY(-50%)',
             cursor: isDragging ? 'grabbing' : 'grab',
           }}
-          className="pointer-events-auto fixed w-12 h-12 bg-blue-600 hover:bg-blue-700 rounded-l-lg shadow-lg hover:shadow-xl flex items-center justify-center transition-colors duration-200 z-[999999] select-none"
-          aria-label="Open Manipulation Radar"
+          className={`pointer-events-auto fixed w-12 h-12 rounded-l-lg shadow-lg hover:shadow-xl flex items-center justify-center transition-colors duration-200 z-[999999] select-none ${
+            lockState && !lockState.isActive
+              ? 'bg-yellow-600 hover:bg-yellow-700'
+              : 'bg-blue-600 hover:bg-blue-700'
+          }`}
+          aria-label={lockState && !lockState.isActive ? 'Manipulation Radar - Locked' : 'Open Manipulation Radar'}
         >
-          <span className={`text-xl font-bold ${getScoreColor(trustScore)} pointer-events-none`}>
-            {trustScore}
-          </span>
+          {!lockState.isActive ? (
+            <svg
+              className="w-6 h-6 text-white pointer-events-none"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+              />
+            </svg>
+          ) : (
+            <span className={`text-xl font-bold ${getScoreColor(trustScore)} pointer-events-none`}>
+              {trustScore}
+            </span>
+          )}
         </motion.button>
       )}
     </AnimatePresence>
