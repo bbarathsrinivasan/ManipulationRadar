@@ -90,7 +90,7 @@ When chatting with ChatGPT or Claude:
 - **Collapse**: Click X to minimize to a draggable icon
 - **Reposition**: Drag the collapsed icon to your preferred position
 
-![Sidebar Features](docs/screenshots/sidebar-features.png)
+![Sidebar Features](docs/screenshots/details.png)
 *The sidebar tracks all verifications and provides detailed statistics*
 
 ---
