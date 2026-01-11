@@ -2,6 +2,8 @@
  * Custom error classes for the verify-manipulation Edge Function
  */
 
+import { corsHeaders } from '../_shared/cors.ts';
+
 export class ValidationError extends Error {
   constructor(message: string) {
     super(message);
@@ -69,7 +71,9 @@ export function createErrorResponse(error: Error): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
+      ...corsHeaders,
       'Content-Type': 'application/json',
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
       ...(error instanceof RateLimitError && {
         'Retry-After': error.retryAfter.toString(),
       }),

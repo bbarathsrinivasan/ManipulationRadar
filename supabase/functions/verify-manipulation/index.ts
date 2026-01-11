@@ -9,14 +9,14 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { corsHeaders } from '../_shared/cors.ts';
 
-import { verifyJWT, extractTokenFromHeader } from './auth.ts';
+// Authentication removed - no JWT verification needed
 import { validateRequest } from './validation.ts';
 import { checkRateLimit, acquireInFlightLock, releaseInFlightLock } from './rateLimit.ts';
 import { getCache, setCache } from './cache.ts';
 import { callAzureOpenAI } from './azureOpenAI.ts';
 import { buildPrompt } from './prompt.ts';
 import { calculateRiskScore, calculateReliabilityLevel } from './scoring.ts';
-import { createErrorResponse, AuthenticationError, ValidationError, RateLimitError } from './errors.ts';
+import { createErrorResponse, ValidationError, RateLimitError } from './errors.ts';
 import {
   VerifyRequest,
   VerifyResponse,
@@ -26,39 +26,67 @@ import {
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') || '';
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
-const AZURE_OPENAI_BASE_URL = Deno.env.get('AZURE_OPENAI_BASE_URL') || '';
-const AZURE_OPENAI_DEPLOYMENT = Deno.env.get('AZURE_OPENAI_DEPLOYMENT') || 'gpt-5-nano';
+// Azure OpenAI config is now loaded at runtime in azureOpenAI.ts
 
-serve(async (req) => {
+// Main request handler
+async function handleRequest(req: Request): Promise<Response> {
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
+    return new Response('ok', { 
+      status: 200,
+      headers: {
+        ...corsHeaders,
+        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+        'Access-Control-Max-Age': '86400',
+      },
+    });
   }
 
   const startTime = Date.now();
 
+  // Wrap everything in try-catch to ensure CORS headers are always returned
   try {
-    // Extract and verify JWT
-    const authHeader = req.headers.get('Authorization');
-    const token = extractTokenFromHeader(authHeader);
+    // Authentication removed - allow anonymous access
+    // Generate a stable anonymous user ID (UUID format) for rate limiting and caching
+    // Use a combination of IP and user-agent to create a deterministic UUID
+    const userAgent = req.headers.get('user-agent') || 'unknown';
+    const forwardedFor = req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || 'unknown';
     
-    if (!token) {
-      return createErrorResponse(new AuthenticationError('Missing authorization header'));
+    // Create a deterministic UUID v5-like string from IP and user agent
+    // This ensures same user gets same ID, and it's in valid UUID format for database
+    async function generateDeterministicUUID(seed: string): Promise<string> {
+      // Use crypto to create a hash
+      const encoder = new TextEncoder();
+      const data = encoder.encode(seed);
+      const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+      
+      // Format as UUID v4: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
+      // Use first 32 hex chars from hash
+      const uuid = `${hashHex.substring(0, 8)}-${hashHex.substring(8, 12)}-4${hashHex.substring(13, 16)}-${(parseInt(hashHex.substring(16, 17), 16) & 0x3 | 0x8).toString(16)}${hashHex.substring(17, 20)}-${hashHex.substring(20, 32)}`;
+      return uuid;
     }
-
-    let userId: string;
-    try {
-      const authResult = await verifyJWT(token);
-      userId = authResult.userId;
-    } catch (error) {
-      return createErrorResponse(error as Error);
-    }
+    
+    const seed = `anon_${forwardedFor.split(',')[0].trim()}_${userAgent}`;
+    const userId = await generateDeterministicUUID(seed);
+    
+    console.log('Manipulation Radar: Request received', {
+      method: req.method,
+      url: req.url,
+      userId: userId.substring(0, 20) + '...',
+    });
 
     // Parse request body
     let requestBody: unknown;
     try {
-      requestBody = await req.json();
+      const bodyText = await req.text();
+      if (!bodyText) {
+        return createErrorResponse(new ValidationError('Request body is empty'));
+      }
+      requestBody = JSON.parse(bodyText);
     } catch (error) {
+      console.error('JSON parse error:', error);
       return createErrorResponse(new ValidationError('Invalid JSON in request body'));
     }
 
@@ -69,6 +97,14 @@ serve(async (req) => {
     } catch (error) {
       return createErrorResponse(error as Error);
     }
+    
+    // Log validated request details
+    console.log('Manipulation Radar: Request validated', {
+      messageId: request.message_id,
+      assistantResponseLength: request.assistant_response?.length || 0,
+      hasUserPrompt: !!request.user_prompt,
+      contextLength: request.context?.length || 0,
+    });
 
     // Check rate limit
     try {
@@ -85,6 +121,7 @@ serve(async (req) => {
             headers: {
               ...corsHeaders,
               'Content-Type': 'application/json',
+              'Access-Control-Allow-Methods': 'POST, OPTIONS',
               'Retry-After': String(rateLimitResult.retryAfter || 60),
             },
           }
@@ -94,36 +131,71 @@ serve(async (req) => {
       return createErrorResponse(error as Error);
     }
 
-    // Check in-flight lock
-    const hasLock = await acquireInFlightLock(userId);
-    if (!hasLock) {
-      return createErrorResponse(
-        new RateLimitError('Another analysis is already in progress. Please wait.', 30)
-      );
+    // Check in-flight lock (with error handling)
+    try {
+      const hasLock = await acquireInFlightLock(userId);
+      if (!hasLock) {
+        return createErrorResponse(
+          new RateLimitError('Another analysis is already in progress. Please wait.', 30)
+        );
+      }
+    } catch (error) {
+      console.error('In-flight lock error:', error);
+      // Continue anyway - don't block on lock errors
     }
 
     try {
-      // Check cache
+      // Check cache (with error handling)
+      // NOTE: Cache is based on userId + messageId + sensitivity
+      // If messageId is not unique per message, cache will return wrong results
       const sensitivity = request.options?.sensitivity || 'medium';
-      const cachedResult = await getCache(userId, request.message_id, sensitivity);
+      let cachedResult = null;
+      try {
+        cachedResult = await getCache(userId, request.message_id, sensitivity);
+        if (cachedResult) {
+          console.log('Cache hit for message_id:', request.message_id, {
+            cacheKey: `${userId}:${request.message_id}:${sensitivity}`,
+            cachedResponsePreview: JSON.stringify(cachedResult).substring(0, 100),
+          });
+        }
+      } catch (error) {
+        console.error('Cache get error:', error);
+        // Continue - cache errors shouldn't block
+      }
 
       if (cachedResult) {
         // Return cached result
-        await releaseInFlightLock(userId);
+        try {
+          await releaseInFlightLock(userId);
+        } catch (e) {
+          // Ignore lock release errors
+        }
         const latency = Date.now() - startTime;
+        console.log('Returning cached result for message_id:', request.message_id);
         return new Response(
           JSON.stringify({
             ...cachedResult,
             meta: {
               ...cachedResult.meta,
               latency_ms: latency,
+              cached: true,
             },
           }),
           {
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 200,
+            headers: { 
+              ...corsHeaders, 
+              'Content-Type': 'application/json',
+              'Access-Control-Allow-Methods': 'POST, OPTIONS',
+            },
           }
         );
       }
+      
+      console.log('Cache miss for message_id:', request.message_id, {
+        assistantResponsePreview: request.assistant_response.substring(0, 50),
+        '- proceeding with analysis': true,
+      });
 
       // Build prompts
       const { systemPrompt, userPrompt } = buildPrompt(request);
@@ -134,17 +206,35 @@ serve(async (req) => {
         llmResponse = await callAzureOpenAI(systemPrompt, userPrompt);
       } catch (error) {
         await releaseInFlightLock(userId);
-        return createErrorResponse(error as Error);
+        console.error('Azure OpenAI error:', error);
+        // Return error with CORS headers
+        const errorResponse = createErrorResponse(error as Error);
+        return errorResponse;
       }
 
       // Parse and validate JSON response
       let parsedResponse: AzureOpenAIResponse;
       try {
-        // Try to extract JSON from markdown code blocks if present
+        // The response from Azure AI Foundry is already a JSON string
+        // Try to extract JSON from markdown code blocks if present (some models wrap it)
         let jsonText = llmResponse.trim();
+        
+        // Remove markdown code blocks if present
         const jsonMatch = jsonText.match(/```(?:json)?\s*(\{[\s\S]*\})\s*```/);
         if (jsonMatch) {
           jsonText = jsonMatch[1];
+        }
+        
+        // Remove leading/trailing whitespace and quotes if the response is double-encoded
+        jsonText = jsonText.trim();
+        if (jsonText.startsWith('"') && jsonText.endsWith('"')) {
+          // It's a JSON-encoded string, unescape it
+          try {
+            jsonText = JSON.parse(jsonText);
+          } catch {
+            // If parsing fails, try removing quotes manually
+            jsonText = jsonText.slice(1, -1).replace(/\\"/g, '"').replace(/\\n/g, '\n');
+          }
         }
 
         parsedResponse = JSON.parse(jsonText) as AzureOpenAIResponse;
@@ -176,15 +266,20 @@ serve(async (req) => {
           ],
           meta: {
             provider: 'azure_openai',
-            base_url: AZURE_OPENAI_BASE_URL,
-            deployment: AZURE_OPENAI_DEPLOYMENT,
+            base_url: Deno.env.get('AZURE_OPENAI_BASE_URL') || 'not-configured',
+            deployment: Deno.env.get('AZURE_OPENAI_DEPLOYMENT') || 'not-configured',
             cached: false,
             latency_ms: Date.now() - startTime,
           },
         };
 
         return new Response(JSON.stringify(fallbackResponse), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 200,
+          headers: { 
+            ...corsHeaders, 
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Methods': 'POST, OPTIONS',
+          },
         });
       }
 
@@ -273,8 +368,8 @@ serve(async (req) => {
         suggestions,
         meta: {
           provider: 'azure_openai',
-          base_url: AZURE_OPENAI_BASE_URL,
-          deployment: AZURE_OPENAI_DEPLOYMENT,
+          base_url: Deno.env.get('AZURE_OPENAI_BASE_URL') || 'not-configured',
+          deployment: Deno.env.get('AZURE_OPENAI_DEPLOYMENT') || 'not-configured',
           cached: false,
           latency_ms: Date.now() - startTime,
         },
@@ -283,47 +378,88 @@ serve(async (req) => {
       // Store in cache
       await setCache(userId, request.message_id, sensitivity, response);
 
-      // Optional event logging
-      if (request.options?.store_event) {
-        try {
-          const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-            auth: {
-              autoRefreshToken: false,
-              persistSession: false,
-            },
-          });
+      // Optional event logging (disabled for anonymous users)
+      // Note: Event logging requires user_id which references auth.users
+      // For anonymous access, we skip event logging
+      // if (request.options?.store_event) {
+      //   // Event logging disabled for anonymous access
+      // }
 
-          await supabase.from('verification_events').insert({
-            user_id: userId,
-            message_id: request.message_id,
-            timestamp: new Date().toISOString(),
-            platform: request.platform,
-            risk_score: riskScore,
-            risk_level: riskLevel,
-            reliability_score: reliabilityScore,
-            reliability_level: reliabilityLevel,
-            counts_by_type: countsByType,
-            model: AZURE_OPENAI_DEPLOYMENT,
-            cached: false,
-            latency_ms: response.meta.latency_ms,
-          });
-        } catch (error) {
-          console.error('Error logging event:', error);
-          // Don't fail the request if logging fails
-        }
+      // Release lock (with error handling)
+      try {
+        await releaseInFlightLock(userId);
+      } catch (error) {
+        console.error('Lock release error:', error);
+        // Continue - lock release errors shouldn't block response
       }
 
-      await releaseInFlightLock(userId);
-
       return new Response(JSON.stringify(response), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: 200,
+        headers: { 
+          ...corsHeaders, 
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Methods': 'POST, OPTIONS',
+        },
       });
     } finally {
-      // Always release lock
-      await releaseInFlightLock(userId);
+      // Always try to release lock
+      try {
+        await releaseInFlightLock(userId);
+      } catch (error) {
+        // Ignore errors in finally block
+      }
     }
   } catch (error) {
     console.error('Unexpected error:', error);
-    return createErrorResponse(error as Error);
+    console.error('Error stack:', error instanceof Error ? error.stack : 'No stack trace');
+    console.error('Error name:', error instanceof Error ? error.name : typeof error);
+    console.error('Error message:', error instanceof Error ? error.message : String(error));
+    
+    // Ensure error response has CORS headers - always return proper CORS
+    try {
+      const errorResponse = createErrorResponse(error as Error);
+      return errorResponse;
+    } catch (responseError) {
+      // Fallback: if createErrorResponse fails, return basic error with CORS
+      console.error('Failed to create error response:', responseError);
+      return new Response(
+        JSON.stringify({
+          error: 'InternalServerError',
+          message: error instanceof Error ? error.message : 'An unexpected error occurred',
+        }),
+        {
+          status: 500,
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Methods': 'POST, OPTIONS',
+          },
+        }
+      );
+    }
+  }
+}
+
+// Serve with error wrapper to ensure CORS headers are always returned
+serve(async (req) => {
+  try {
+    return await handleRequest(req);
+  } catch (error) {
+    // Ultimate fallback - ensure CORS headers even if everything fails
+    console.error('Fatal error in serve wrapper:', error);
+    return new Response(
+      JSON.stringify({
+        error: 'InternalServerError',
+        message: 'A fatal error occurred',
+      }),
+      {
+        status: 500,
+        headers: {
+          ...corsHeaders,
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Methods': 'POST, OPTIONS',
+        },
+      }
+    );
   }
 });

@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { getScoreColor, getScoreBgColor, getSeverityColor } from '../lib/scorer.js';
 import '../styles.css';
 
-function Sidebar({ trustScore = 100, recentFlags = [], messageHistory = [], selectedMessage = null, onBackToOverview = null, lockState = { isActive: false, ownerTabId: null, ownerUrl: null, since: null }, onTakeover = null }) {
+function Sidebar({ trustScore = 100, recentFlags = [], messageHistory = [], selectedMessage = null, onBackToOverview = null, lockState = { isActive: false, ownerTabId: null, ownerUrl: null, since: null }, onTakeover = null, verificationHistory = [] }) {
   const [isExpanded, setIsExpanded] = useState(() => {
     const saved = localStorage.getItem('manipulationRadarExpanded');
     return saved !== null ? JSON.parse(saved) : true; // Default to true (expanded)
@@ -293,22 +293,25 @@ function Sidebar({ trustScore = 100, recentFlags = [], messageHistory = [], sele
   // Overview View Component (existing view)
   const OverviewView = () => (
     <>
-      {/* Trust Score Display - Updated for On-Demand Verification */}
+      {/* Verification Status - Updated for On-Demand Verification */}
       <div className="p-6 bg-gray-800/50 border-b border-gray-700">
         <div className="text-sm text-gray-400 mb-2">Verification Status</div>
-        <div className="text-4xl font-bold text-gray-500 mb-2">N/A</div>
+        <div className="flex items-center gap-2 mb-2">
+          <div className="w-3 h-3 rounded-full bg-green-500 animate-pulse"></div>
+          <div className="text-lg font-semibold text-green-400">Online</div>
+        </div>
         <div className="text-xs text-gray-400 mt-2">
-          Click "Verify Response" on any AI message to analyze
+          Click "🔍 Verify Response" on any AI message to analyze
         </div>
       </div>
 
-      {/* Recent Flags - Updated for Verification History */}
+      {/* Verification History */}
       <div className="flex-1 overflow-y-auto p-4">
         <div className="text-sm font-semibold text-gray-300 mb-3">
           Verification History
         </div>
         
-        {recentFlags.length === 0 ? (
+        {verificationHistory.length === 0 && recentFlags.length === 0 ? (
           <div className="text-sm text-gray-500 text-center py-8">
             <div className="mb-2">No verifications yet.</div>
             <div className="text-xs">Click "🔍 Verify Response" on any AI message to start.</div>
@@ -316,7 +319,60 @@ function Sidebar({ trustScore = 100, recentFlags = [], messageHistory = [], sele
         ) : (
           <div className="space-y-2">
             <AnimatePresence>
-              {recentFlags.map((flag, index) => (
+              {/* Show verification history entries */}
+              {verificationHistory.map((verification, index) => (
+                <motion.div
+                  key={`verification-${verification.messageId}-${index}`}
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  transition={{ duration: 0.2 }}
+                  className="bg-gray-800 rounded-lg p-3 border border-gray-700 cursor-pointer hover:bg-gray-750 transition-colors"
+                  onClick={() => {
+                    // Could open message detail view here
+                  }}
+                >
+                  <div className="flex items-start justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-lg font-bold ${verification.riskScore === 0 ? 'text-green-400' : verification.riskScore < 50 ? 'text-yellow-400' : 'text-red-400'}`}>
+                        {verification.riskScore}
+                      </span>
+                      <span className="text-xs text-gray-400">
+                        Risk / {verification.reliabilityScore} Reliability
+                      </span>
+                    </div>
+                    <span className="text-xs text-gray-500">
+                      {formatTime(verification.timestamp)}
+                    </span>
+                  </div>
+                  <div className="text-xs text-gray-300 mb-2 line-clamp-2">
+                    {verification.messageText}
+                  </div>
+                  {verification.detections && verification.detections.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      {verification.detections.slice(0, 3).map((det, i) => (
+                        <span
+                          key={i}
+                          className="px-2 py-0.5 rounded text-xs bg-gray-700 text-gray-300 capitalize"
+                        >
+                          {det.type}
+                        </span>
+                      ))}
+                      {verification.detections.length > 3 && (
+                        <span className="px-2 py-0.5 rounded text-xs bg-gray-700 text-gray-400">
+                          +{verification.detections.length - 3}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  {verification.detections && verification.detections.length === 0 && (
+                    <div className="text-xs text-green-400 mt-2">✓ No issues detected</div>
+                  )}
+                </motion.div>
+              ))}
+              
+              {/* Show recent flags if no verification history yet */}
+              {verificationHistory.length === 0 && recentFlags.map((flag, index) => (
                 <motion.div
                   key={`${flag.timestamp}-${index}`}
                   initial={{ opacity: 0, x: 20 }}
@@ -381,16 +437,23 @@ function Sidebar({ trustScore = 100, recentFlags = [], messageHistory = [], sele
             >
               <div className="p-4 space-y-3 bg-gray-800/50">
                 <div>
-                  <div className="text-xs text-gray-400 mb-1">Total Messages Analyzed</div>
+                  <div className="text-xs text-gray-400 mb-1">Total Verifications</div>
                   <div className="text-sm text-white font-semibold">
-                    {messageHistory.length}
+                    {verificationHistory.length}
                   </div>
                 </div>
                 
                 <div>
-                  <div className="text-xs text-gray-400 mb-1">Flags Detected</div>
+                  <div className="text-xs text-gray-400 mb-1">Total Flags Detected</div>
                   <div className="text-sm text-white font-semibold">
-                    {recentFlags.length}
+                    {recentFlags.filter(f => f.type !== 'none').length}
+                  </div>
+                </div>
+                
+                <div>
+                  <div className="text-xs text-gray-400 mb-1">Messages Analyzed</div>
+                  <div className="text-sm text-white font-semibold">
+                    {messageHistory.length}
                   </div>
                 </div>
 

@@ -47,6 +47,7 @@ function createSidebar() {
       trustScore: currentTrustScore,
       recentFlags: recentFlags,
       messageHistory: messageHistory,
+      verificationHistory: verificationHistory,
       lockState: lockState,
       onTakeover: handleTakeover,
     });
@@ -80,8 +81,9 @@ function createSidebar() {
 // State management
 let messageHistory = [];
 let currentTrustScore = 100;
-let recentFlags = [];
+let recentFlags = []; // Array of verification results/flags
 let selectedMessage = null;
+let verificationHistory = []; // Array of completed verifications
 let messageDataMap = new Map(); // Map message elements to their data
 
 // Lock state management
@@ -97,6 +99,26 @@ let userMessageObserver = null; // Track separately for cleanup
 // Verification state management
 let verificationStates = new Map(); // Track verification state per message: "not_verified" | "verifying" | "verified"
 let verifiedMessages = new Map(); // Store verification results per message ID
+
+// Import Supabase configuration (set at build time via environment variables)
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from '../config/supabase.js';
+
+// Supabase configuration (hardcoded at build time - these are public values)
+const supabaseConfig = {
+  url: SUPABASE_URL,
+  anonKey: SUPABASE_ANON_KEY,
+};
+
+// Validate configuration
+if (!supabaseConfig.url || !supabaseConfig.anonKey) {
+  console.error(
+    'Manipulation Radar: Supabase not configured. ' +
+    'Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY environment variables and rebuild the extension.'
+  );
+}
+
+// Track conversation context (user prompts and assistant responses)
+let conversationContext = []; // Array of {role: 'user'|'assistant', content: string, messageId: string}
 
 // Observer for chat messages
 let messageObserver = null;
@@ -377,25 +399,601 @@ function getScoreBgColorClass(score) {
   return 'rgba(239, 68, 68, 0.2)'; // red-500/20
 }
 
+// Authentication removed - no token required
+
 /**
- * Placeholder function for future backend integration
+ * Get user prompt for a given assistant message
+ * @param {string} messageId - Assistant message ID
+ * @returns {string|null} User prompt or null
+ */
+function getUserPromptForMessage(messageId) {
+  // Find the user message that precedes this assistant message
+  const messageIndex = conversationContext.findIndex(msg => msg.messageId === messageId);
+  if (messageIndex > 0) {
+    const prevMessage = conversationContext[messageIndex - 1];
+    if (prevMessage.role === 'user') {
+      return prevMessage.content;
+    }
+  }
+  // Try to find the most recent user message
+  for (let i = conversationContext.length - 1; i >= 0; i--) {
+    if (conversationContext[i].role === 'user') {
+      return conversationContext[i].content;
+    }
+  }
+  return null;
+}
+
+/**
+ * Get conversation context (last 4 turns)
+ * @param {string} messageId - Current message ID
+ * @returns {Array} Context array
+ */
+function getConversationContext(messageId) {
+  const messageIndex = conversationContext.findIndex(msg => msg.messageId === messageId);
+  if (messageIndex === -1) return [];
+  
+  // Get last 4 turns (8 messages max: 4 user + 4 assistant)
+  const startIndex = Math.max(0, messageIndex - 7);
+  return conversationContext.slice(startIndex, messageIndex + 1).map(msg => ({
+    role: msg.role,
+    content: msg.content,
+  }));
+}
+
+/**
+ * Call Supabase Edge Function to verify message
  * @param {string} messageId - Unique message ID
  * @param {string} messageText - Message text to verify
- * @returns {Promise<{success: boolean, message: string, score: number|null, flags: Array}>}
+ * @returns {Promise<Object>} Verification result
  */
 async function verifyMessage(messageId, messageText) {
-  // For now: Return static success result
-  // Later: Call backend API
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      resolve({
-        success: true,
-        message: "No issues found - You can trust this response",
-        score: null, // Will be populated by backend
-        flags: [] // Will be populated by backend
-      });
-    }, 100); // Small delay to simulate async
+  // Check if Supabase is configured
+  if (!supabaseConfig.url || !supabaseConfig.anonKey) {
+    throw new Error(
+      'Supabase not configured. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY ' +
+      'environment variables and rebuild the extension.'
+    );
+  }
+
+  // Get user prompt and context
+  const userPrompt = getUserPromptForMessage(messageId);
+  const context = getConversationContext(messageId);
+  const platform = detectPlatform();
+
+  // Prepare request
+  const requestBody = {
+    message_id: messageId,
+    platform: platform || 'other',
+    assistant_response: messageText,
+    options: {
+      sensitivity: 'medium',
+      return_spans: true,
+      max_suggestions: 5,
+      store_event: false, // Set to true if you want to log events
+    },
+  };
+
+  if (userPrompt) {
+    requestBody.user_prompt = userPrompt;
+  }
+
+  if (context.length > 0) {
+    requestBody.context = context;
+  }
+
+  // Call Supabase Edge Function
+  // Note: Supabase requires Authorization header, but we use anon key for anonymous access
+  // Ensure URL doesn't have trailing slash
+  const baseUrl = supabaseConfig.url.replace(/\/$/, '');
+  const functionUrl = `${baseUrl}/functions/v1/verify-manipulation`;
+  
+  console.log('Manipulation Radar: Calling verify-manipulation', {
+    messageId,
+    messageTextPreview: messageText.substring(0, 50) + '...',
+    messageTextLength: messageText.length,
+    hasUserPrompt: !!userPrompt,
+    contextLength: context.length,
+    urlPreview: functionUrl.substring(0, 50) + '...',
   });
+  
+  try {
+    const response = await fetch(functionUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${supabaseConfig.anonKey}`,
+        'Content-Type': 'application/json',
+        'apikey': supabaseConfig.anonKey,
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ message: 'Unknown error' }));
+      
+      if (response.status === 429) {
+        const retryAfter = response.headers.get('Retry-After') || '60';
+        throw new Error(`Rate limit exceeded. Please try again in ${retryAfter} seconds.`);
+      } else {
+        throw new Error(errorData.message || `API error: ${response.status} ${response.statusText}`);
+      }
+    }
+
+    const data = await response.json();
+    
+    // Transform backend response to frontend format
+    return {
+      success: true,
+      message: data.manipulation.risk_score === 0 
+        ? 'No issues found - You can trust this response'
+        : `Risk score: ${data.manipulation.risk_score}/100 (${data.manipulation.risk_level})`,
+      riskScore: data.manipulation.risk_score,
+      riskLevel: data.manipulation.risk_level,
+      reliabilityScore: data.reliability.score,
+      reliabilityLevel: data.reliability.level,
+      detections: data.manipulation.detections || [],
+      countsByType: data.manipulation.counts_by_type || {},
+      topIssues: data.reliability.top_issues || [],
+      suggestions: data.suggestions || [],
+      meta: data.meta,
+    };
+  } catch (error) {
+    console.error('Manipulation Radar: Verification error', error);
+    console.error('Manipulation Radar: Error details', {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+      config: {
+        hasUrl: !!supabaseConfig.url,
+        urlPreview: supabaseConfig.url ? `${supabaseConfig.url.substring(0, 30)}...` : 'MISSING',
+        hasKey: !!supabaseConfig.anonKey,
+      }
+    });
+    
+    // Provide more helpful error messages
+    if (error instanceof TypeError && error.message.includes('fetch')) {
+      if (!supabaseConfig.url || !supabaseConfig.anonKey) {
+        throw new Error(
+          'Supabase not configured. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY ' +
+          'environment variables and rebuild the extension.'
+        );
+      }
+      
+      // Check for CORS or network issues
+      if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+        throw new Error(
+          `Network error: Unable to reach Supabase. ` +
+          `This could be a CORS issue or network problem. ` +
+          `Check the browser console for details. ` +
+          `URL: ${supabaseConfig.url.substring(0, 50)}...`
+        );
+      }
+      
+      throw new Error(
+        `Network error: ${error.message}. ` +
+        `Check that your Supabase URL is correct and the function is deployed.`
+      );
+    }
+    
+    throw error;
+  }
+}
+
+/**
+ * Call improve-prompt Edge Function
+ * @param {string} promptText - Original prompt text
+ * @returns {Promise<Object>} Improvement result
+ */
+async function improvePrompt(promptText) {
+  if (!supabaseConfig.url || !supabaseConfig.anonKey) {
+    throw new Error(
+      'Supabase not configured. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY ' +
+      'environment variables and rebuild the extension.'
+    );
+  }
+
+  const baseUrl = supabaseConfig.url.replace(/\/$/, '');
+  const functionUrl = `${baseUrl}/functions/v1/improve-prompt`;
+  
+  console.log('Manipulation Radar: Calling improve-prompt', {
+    promptLength: promptText.length,
+  });
+  
+  try {
+    const response = await fetch(functionUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${supabaseConfig.anonKey}`,
+        'Content-Type': 'application/json',
+        'apikey': supabaseConfig.anonKey,
+      },
+      body: JSON.stringify({
+        prompt: promptText,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ message: 'Unknown error' }));
+      throw new Error(errorData.message || `API error: ${response.status} ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    return {
+      success: true,
+      rewritten_prompt: data.rewritten_prompt || promptText,
+      response_requirements: data.response_requirements || [],
+      why_this_is_better: data.why_this_is_better || [],
+      meta: data.meta,
+    };
+  } catch (error) {
+    console.error('Manipulation Radar: Improvement error', error);
+    throw error;
+  }
+}
+
+/**
+ * Show improvement process for a prompt
+ * @param {string} promptText - Original prompt text
+ * @param {HTMLElement} messageEl - Message element (for user messages) or input element
+ */
+async function showImprovementProcess(promptText, messageEl) {
+  // Check if already improving
+  const existingProcess = messageEl.querySelector('.manipulation-radar-improvement-process');
+  if (existingProcess) {
+    return; // Already processing
+  }
+
+  // Create improvement container
+  const improvementContainer = document.createElement('div');
+  improvementContainer.className = 'manipulation-radar-improvement-process';
+  improvementContainer.setAttribute('data-prompt-text', promptText);
+
+  const stepDisplay = document.createElement('div');
+  stepDisplay.className = 'manipulation-radar-improvement-step';
+  stepDisplay.textContent = 'Generating...';
+
+  const spinner = document.createElement('div');
+  spinner.className = 'manipulation-radar-improvement-spinner';
+  improvementContainer.appendChild(spinner);
+  improvementContainer.appendChild(stepDisplay);
+
+  // Insert after the message or button
+  const button = messageEl.querySelector('.manipulation-radar-improve-prompt-btn');
+  if (button) {
+    button.style.display = 'none'; // Hide button while processing
+    button.parentNode.insertBefore(improvementContainer, button.nextSibling);
+  } else {
+    messageEl.appendChild(improvementContainer);
+  }
+
+  try {
+    // Call improve-prompt function
+    const result = await improvePrompt(promptText);
+    
+    // Remove loading UI
+    spinner.remove();
+    stepDisplay.remove();
+    
+    // Show result
+    showImprovementResult(promptText, messageEl, result, improvementContainer);
+  } catch (error) {
+    console.error('Manipulation Radar: Improvement error', error);
+    
+    // Remove loading UI
+    spinner.remove();
+    stepDisplay.remove();
+    
+    // Show error
+    const errorDiv = document.createElement('div');
+    errorDiv.className = 'manipulation-radar-improvement-error';
+    errorDiv.textContent = `Error: ${error.message || 'Failed to improve prompt'}`;
+    improvementContainer.appendChild(errorDiv);
+    
+    // Show button again
+    if (button) {
+      button.style.display = 'inline-flex';
+    }
+  }
+}
+
+/**
+ * Show improvement process for input field (while typing)
+ * @param {string} promptText - Original prompt text
+ * @param {HTMLElement} inputEl - Input element
+ */
+async function showImprovementProcessForInput(promptText, inputEl) {
+  // Create a modal/overlay for input improvements
+  const modal = document.createElement('div');
+  modal.className = 'manipulation-radar-improvement-modal';
+  modal.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(8px);
+    z-index: 100000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  `;
+
+  const content = document.createElement('div');
+  content.style.cssText = `
+    background: #1f2937;
+    border-radius: 16px;
+    padding: 24px;
+    max-width: 600px;
+    width: 100%;
+    max-height: 80vh;
+    overflow-y: auto;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  `;
+
+  const stepDisplay = document.createElement('div');
+  stepDisplay.className = 'manipulation-radar-improvement-step';
+  stepDisplay.textContent = 'Generating improved prompt...';
+  stepDisplay.style.cssText = `
+    color: #60a5fa;
+    font-size: 16px;
+    margin-bottom: 20px;
+    text-align: center;
+  `;
+
+  const spinner = document.createElement('div');
+  spinner.className = 'manipulation-radar-improvement-spinner';
+  spinner.style.cssText = `
+    width: 40px;
+    height: 40px;
+    margin: 0 auto 20px;
+  `;
+
+  content.appendChild(spinner);
+  content.appendChild(stepDisplay);
+  modal.appendChild(content);
+  document.body.appendChild(modal);
+
+  try {
+    const result = await improvePrompt(promptText);
+    
+    // Remove loading UI
+    spinner.remove();
+    stepDisplay.remove();
+    
+    // Show result in modal
+    showImprovementResultInModal(result, content, modal, inputEl);
+  } catch (error) {
+    console.error('Manipulation Radar: Improvement error', error);
+    
+    spinner.remove();
+    stepDisplay.remove();
+    
+    const errorDiv = document.createElement('div');
+    errorDiv.style.cssText = `
+      color: #ef4444;
+      padding: 16px;
+      background: rgba(239, 68, 68, 0.1);
+      border-radius: 8px;
+      margin-top: 16px;
+    `;
+    errorDiv.textContent = `Error: ${error.message || 'Failed to improve prompt'}`;
+    content.appendChild(errorDiv);
+    
+    // Add close button
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = 'Close';
+    closeBtn.style.cssText = `
+      margin-top: 16px;
+      padding: 8px 16px;
+      background: #374151;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+    `;
+    closeBtn.onclick = () => modal.remove();
+    content.appendChild(closeBtn);
+  }
+}
+
+/**
+ * Show improvement result below message
+ * @param {string} originalPrompt - Original prompt text
+ * @param {HTMLElement} messageEl - Message element
+ * @param {Object} result - Improvement result
+ * @param {HTMLElement} container - Container element
+ */
+function showImprovementResult(originalPrompt, messageEl, result, container) {
+  const resultDiv = document.createElement('div');
+  resultDiv.className = 'manipulation-radar-improvement-result';
+  resultDiv.style.cssText = `
+    margin-top: 12px;
+    padding: 16px;
+    background: rgba(34, 197, 94, 0.1);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(34, 197, 94, 0.3);
+    border-radius: 12px;
+    color: #86efac;
+  `;
+
+  const title = document.createElement('div');
+  title.style.cssText = 'font-weight: 600; margin-bottom: 12px; font-size: 14px;';
+  title.textContent = '✨ Improved Prompt:';
+  resultDiv.appendChild(title);
+
+  const improvedPrompt = document.createElement('div');
+  improvedPrompt.style.cssText = `
+    background: rgba(0, 0, 0, 0.3);
+    padding: 12px;
+    border-radius: 8px;
+    margin-bottom: 12px;
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  `;
+  improvedPrompt.textContent = result.rewritten_prompt;
+  resultDiv.appendChild(improvedPrompt);
+
+  // Add copy button
+  const copyBtn = document.createElement('button');
+  copyBtn.textContent = '📋 Copy Improved Prompt';
+  copyBtn.style.cssText = `
+    padding: 6px 12px;
+    background: rgba(34, 197, 94, 0.2);
+    border: 1px solid rgba(34, 197, 94, 0.4);
+    border-radius: 8px;
+    color: #86efac;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    margin-right: 8px;
+  `;
+  copyBtn.onclick = () => {
+    navigator.clipboard.writeText(result.rewritten_prompt);
+    copyBtn.textContent = '✓ Copied!';
+    setTimeout(() => {
+      copyBtn.textContent = '📋 Copy Improved Prompt';
+    }, 2000);
+  };
+  resultDiv.appendChild(copyBtn);
+
+  // Add close button
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '✕ Close';
+  closeBtn.style.cssText = `
+    padding: 6px 12px;
+    background: rgba(107, 114, 128, 0.2);
+    border: 1px solid rgba(107, 114, 128, 0.4);
+    border-radius: 8px;
+    color: #9ca3af;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+  `;
+  closeBtn.onclick = () => {
+    container.remove();
+    const button = messageEl.querySelector('.manipulation-radar-improve-prompt-btn');
+    if (button) {
+      button.style.display = 'inline-flex';
+    }
+  };
+  resultDiv.appendChild(closeBtn);
+
+  container.appendChild(resultDiv);
+}
+
+/**
+ * Show improvement result in modal (for input field)
+ * @param {Object} result - Improvement result
+ * @param {HTMLElement} content - Modal content element
+ * @param {HTMLElement} modal - Modal element
+ * @param {HTMLElement} inputEl - Input element
+ */
+function showImprovementResultInModal(result, content, modal, inputEl) {
+  const title = document.createElement('h3');
+  title.textContent = '✨ Improved Prompt';
+  title.style.cssText = `
+    color: #86efac;
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 16px;
+  `;
+  content.appendChild(title);
+
+  const improvedPrompt = document.createElement('div');
+  improvedPrompt.style.cssText = `
+    background: rgba(0, 0, 0, 0.3);
+    padding: 16px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    font-size: 14px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    color: #e5e7eb;
+    max-height: 300px;
+    overflow-y: auto;
+  `;
+  improvedPrompt.textContent = result.rewritten_prompt;
+  content.appendChild(improvedPrompt);
+
+  const buttonContainer = document.createElement('div');
+  buttonContainer.style.cssText = `
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  `;
+
+  // Insert into input button
+  const insertBtn = document.createElement('button');
+  insertBtn.textContent = '📝 Insert into Input';
+  insertBtn.style.cssText = `
+    padding: 10px 20px;
+    background: rgba(34, 197, 94, 0.2);
+    border: 1px solid rgba(34, 197, 94, 0.4);
+    border-radius: 8px;
+    color: #86efac;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    flex: 1;
+  `;
+  insertBtn.onclick = () => {
+    if (inputEl.value !== undefined) {
+      inputEl.value = result.rewritten_prompt;
+    } else {
+      inputEl.textContent = result.rewritten_prompt;
+    }
+    // Trigger input event
+    inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+    modal.remove();
+  };
+  buttonContainer.appendChild(insertBtn);
+
+  // Copy button
+  const copyBtn = document.createElement('button');
+  copyBtn.textContent = '📋 Copy';
+  copyBtn.style.cssText = `
+    padding: 10px 20px;
+    background: rgba(59, 130, 246, 0.2);
+    border: 1px solid rgba(59, 130, 246, 0.4);
+    border-radius: 8px;
+    color: #60a5fa;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    flex: 1;
+  `;
+  copyBtn.onclick = () => {
+    navigator.clipboard.writeText(result.rewritten_prompt);
+    copyBtn.textContent = '✓ Copied!';
+    setTimeout(() => {
+      copyBtn.textContent = '📋 Copy';
+    }, 2000);
+  };
+  buttonContainer.appendChild(copyBtn);
+
+  // Close button
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '✕ Close';
+  closeBtn.style.cssText = `
+    padding: 10px 20px;
+    background: rgba(107, 114, 128, 0.2);
+    border: 1px solid rgba(107, 114, 128, 0.4);
+    border-radius: 8px;
+    color: #9ca3af;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    flex: 1;
+  `;
+  closeBtn.onclick = () => modal.remove();
+  buttonContainer.appendChild(closeBtn);
+
+  content.appendChild(buttonContainer);
 }
 
 /**
@@ -528,12 +1126,81 @@ async function showVerificationProcess(messageId, messageText, messageEl) {
     stepDisplay.textContent = verificationSteps[i];
   }
 
-  // Call verification function (placeholder for now)
-  const result = await verifyMessage(messageId, messageText);
-
-  // Store result
-  verifiedMessages.set(messageId, result);
-  verificationStates.set(messageId, 'verified');
+  // Call verification function
+  let result;
+  try {
+    result = await verifyMessage(messageId, messageText);
+    
+    // Store result
+    verifiedMessages.set(messageId, result);
+    verificationStates.set(messageId, 'verified');
+    
+    // Add to verification history
+    const verificationEntry = {
+      messageId,
+      messageText: messageText.substring(0, 200), // Truncate for display
+      timestamp: Date.now(),
+      riskScore: result.riskScore || 0,
+      riskLevel: result.riskLevel || 'Low',
+      reliabilityScore: result.reliabilityScore || 100,
+      reliabilityLevel: result.reliabilityLevel || 'High',
+      detections: result.detections || [],
+      topIssues: result.topIssues || [],
+    };
+    
+    verificationHistory.unshift(verificationEntry);
+    verificationHistory = verificationHistory.slice(0, 20); // Keep last 20 verifications
+    
+    // Update recentFlags for sidebar display
+    if (result.detections && result.detections.length > 0) {
+      result.detections.forEach((detection) => {
+        recentFlags.unshift({
+          type: detection.type,
+          severity: detection.severity >= 7 ? 'high' : detection.severity >= 4 ? 'medium' : 'low',
+          message: detection.rationale || `${detection.type} detected`,
+          timestamp: Date.now(),
+          matchedText: detection.spans ? 'See spans' : undefined,
+        });
+      });
+      recentFlags = recentFlags.slice(0, 50); // Keep last 50 flags
+    } else {
+      // Add a "no issues" entry
+      recentFlags.unshift({
+        type: 'none',
+        severity: 'low',
+        message: 'No manipulation detected',
+        timestamp: Date.now(),
+      });
+      recentFlags = recentFlags.slice(0, 50);
+    }
+    
+    // Update sidebar
+    updateSidebar();
+  } catch (error) {
+    console.error('Manipulation Radar: Verification failed', error);
+    
+    // Show error message
+    stepDisplay.textContent = `Error: ${error.message}`;
+    stepDisplay.style.color = '#ef4444';
+    
+    // Reset button state
+    if (button) {
+      button.disabled = false;
+      button.textContent = '🔍 Verify Response';
+    }
+    
+    // Reset verification state
+    verificationStates.set(messageId, 'not_verified');
+    
+    // Remove UI after 5 seconds
+    setTimeout(() => {
+      spinner.remove();
+      stepDisplay.remove();
+      verificationContainer.remove();
+    }, 5000);
+    
+    return;
+  }
 
   // Remove spinner and step display, show result
   spinner.remove();
@@ -551,6 +1218,46 @@ async function showVerificationProcess(messageId, messageText, messageEl) {
  * @param {Object} result - Verification result
  * @param {HTMLElement} container - Existing container or null
  */
+/**
+ * Insert suggestion prompt into input field
+ * @param {string} promptText - Prompt text to insert
+ */
+function insertSuggestionPrompt(promptText) {
+  // Find the input field (ChatGPT or Claude)
+  const inputSelectors = [
+    'textarea[placeholder*="Message"]',
+    'textarea[placeholder*="message"]',
+    'textarea[data-id="root"]',
+    '#prompt-textarea',
+    'textarea',
+  ];
+
+  let inputEl = null;
+  for (const selector of inputSelectors) {
+    inputEl = document.querySelector(selector);
+    if (inputEl && inputEl.offsetParent !== null) { // Check if visible
+      break;
+    }
+  }
+
+  if (!inputEl) {
+    console.warn('Manipulation Radar: Could not find input field');
+    return;
+  }
+
+  // Insert the prompt text
+  const currentValue = inputEl.value || '';
+  inputEl.value = promptText;
+  inputEl.focus();
+
+  // Trigger input event for ChatGPT/Claude to recognize the change
+  inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+  inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+
+  // Scroll input into view
+  inputEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
 function showVerificationResult(messageId, messageText, messageEl, result, container = null) {
   // Remove existing result if any
   const existingResult = messageEl.querySelector(`.manipulation-radar-verification-result[data-message-id="${messageId}"]`);
@@ -579,27 +1286,66 @@ function showVerificationResult(messageId, messageText, messageEl, result, conta
   const resultEl = document.createElement('div');
   resultEl.className = 'manipulation-radar-verification-result';
   resultEl.setAttribute('data-message-id', messageId);
+  resultEl.style.cssText = `
+    background: rgba(31, 41, 55, 0.95);
+    backdrop-filter: blur(12px) saturate(180%);
+    -webkit-backdrop-filter: blur(12px) saturate(180%);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    padding: 16px;
+    margin-top: 12px;
+    color: #e5e7eb;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+  `;
 
-  // Create result content
-  const resultContent = document.createElement('div');
-  resultContent.className = 'manipulation-radar-verification-result-content';
+  // Create result header
+  const header = document.createElement('div');
+  header.style.cssText = 'display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;';
+  
+  const headerLeft = document.createElement('div');
+  headerLeft.style.cssText = 'display: flex; align-items: center; gap: 8px;';
   
   const checkmark = document.createElement('span');
-  checkmark.textContent = '✓';
-  checkmark.className = 'manipulation-radar-verification-checkmark';
+  checkmark.textContent = result.riskScore === 0 ? '✓' : '⚠';
+  checkmark.style.cssText = `
+    font-size: 20px;
+    color: ${result.riskScore === 0 ? '#10b981' : result.riskScore < 50 ? '#f59e0b' : '#ef4444'};
+  `;
   
-  const message = document.createElement('span');
-  message.textContent = result.message || 'No issues found - You can trust this response';
-  message.className = 'manipulation-radar-verification-message';
+  const title = document.createElement('span');
+  title.textContent = 'Verification Complete';
+  title.style.cssText = 'font-weight: 600; font-size: 14px; color: #e5e7eb;';
   
-  resultContent.appendChild(checkmark);
-  resultContent.appendChild(message);
-  resultEl.appendChild(resultContent);
+  headerLeft.appendChild(checkmark);
+  headerLeft.appendChild(title);
+  header.appendChild(headerLeft);
 
-  // Add close button
+  // Close button
   const closeBtn = document.createElement('button');
-  closeBtn.className = 'manipulation-radar-verification-close';
   closeBtn.innerHTML = '×';
+  closeBtn.style.cssText = `
+    background: none;
+    border: none;
+    color: #9ca3af;
+    font-size: 24px;
+    cursor: pointer;
+    padding: 0;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    transition: all 0.2s;
+  `;
+  closeBtn.onmouseover = () => {
+    closeBtn.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
+    closeBtn.style.color = '#e5e7eb';
+  };
+  closeBtn.onmouseout = () => {
+    closeBtn.style.backgroundColor = 'transparent';
+    closeBtn.style.color = '#9ca3af';
+  };
   closeBtn.onclick = (e) => {
     e.stopPropagation();
     container.remove();
@@ -610,7 +1356,174 @@ function showVerificationResult(messageId, messageText, messageEl, result, conta
       button.textContent = '🔍 Verify Response';
     }
   };
-  resultEl.appendChild(closeBtn);
+  header.appendChild(closeBtn);
+  resultEl.appendChild(header);
+
+  // Scores section
+  const scoresSection = document.createElement('div');
+  scoresSection.style.cssText = 'display: flex; gap: 12px; margin-bottom: 12px;';
+  
+  // Risk score
+  const riskScoreEl = document.createElement('div');
+  riskScoreEl.style.cssText = `
+    flex: 1;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+    padding: 8px;
+    text-align: center;
+  `;
+  const riskLabel = document.createElement('div');
+  riskLabel.textContent = 'Risk Score (Lower is better)';
+  riskLabel.style.cssText = 'font-size: 11px; color: #9ca3af; margin-bottom: 4px;';
+  const riskValue = document.createElement('div');
+  riskValue.textContent = `${result.riskScore || 0}/100`;
+  riskValue.style.cssText = `
+    font-size: 18px;
+    font-weight: 700;
+    color: ${result.riskScore === 0 ? '#10b981' : result.riskScore < 50 ? '#f59e0b' : '#ef4444'};
+  `;
+  const riskLevel = document.createElement('div');
+  riskLevel.textContent = result.riskLevel || 'Low';
+  riskLevel.style.cssText = 'font-size: 10px; color: #9ca3af; margin-top: 2px;';
+  riskScoreEl.appendChild(riskLabel);
+  riskScoreEl.appendChild(riskValue);
+  riskScoreEl.appendChild(riskLevel);
+  
+  // Reliability score
+  const reliabilityScoreEl = document.createElement('div');
+  reliabilityScoreEl.style.cssText = `
+    flex: 1;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+    padding: 8px;
+    text-align: center;
+  `;
+  const reliabilityLabel = document.createElement('div');
+  reliabilityLabel.textContent = 'Reliability (Higher is better)';
+  reliabilityLabel.style.cssText = 'font-size: 11px; color: #9ca3af; margin-bottom: 4px;';
+  const reliabilityValue = document.createElement('div');
+  reliabilityValue.textContent = `${result.reliabilityScore || 100}/100`;
+  reliabilityValue.style.cssText = `
+    font-size: 18px;
+    font-weight: 700;
+    color: ${result.reliabilityScore >= 90 ? '#10b981' : result.reliabilityScore >= 70 ? '#f59e0b' : '#ef4444'};
+  `;
+  const reliabilityLevel = document.createElement('div');
+  reliabilityLevel.textContent = result.reliabilityLevel || 'High';
+  reliabilityLevel.style.cssText = 'font-size: 10px; color: #9ca3af; margin-top: 2px;';
+  reliabilityScoreEl.appendChild(reliabilityLabel);
+  reliabilityScoreEl.appendChild(reliabilityValue);
+  reliabilityScoreEl.appendChild(reliabilityLevel);
+  
+  scoresSection.appendChild(riskScoreEl);
+  scoresSection.appendChild(reliabilityScoreEl);
+  resultEl.appendChild(scoresSection);
+
+  // Detections section (if any)
+  if (result.detections && result.detections.length > 0) {
+    const detectionsSection = document.createElement('div');
+    detectionsSection.style.cssText = 'margin-bottom: 12px;';
+    const detectionsTitle = document.createElement('div');
+    detectionsTitle.textContent = `Detected Issues (${result.detections.length})`;
+    detectionsTitle.style.cssText = 'font-size: 12px; font-weight: 600; color: #e5e7eb; margin-bottom: 8px;';
+    detectionsSection.appendChild(detectionsTitle);
+    
+    result.detections.slice(0, 3).forEach(detection => {
+      const detectionEl = document.createElement('div');
+      detectionEl.style.cssText = `
+        background: rgba(239, 68, 68, 0.1);
+        border-left: 3px solid rgba(239, 68, 68, 0.5);
+        border-radius: 4px;
+        padding: 8px;
+        margin-bottom: 6px;
+        font-size: 12px;
+      `;
+      const detectionType = document.createElement('div');
+      detectionType.textContent = `${detection.type} (Severity: ${detection.severity}/10)`;
+      detectionType.style.cssText = 'font-weight: 600; color: #fca5a5; margin-bottom: 4px;';
+      const detectionRationale = document.createElement('div');
+      detectionRationale.textContent = detection.rationale || '';
+      detectionRationale.style.cssText = 'color: #d1d5db; font-size: 11px;';
+      detectionEl.appendChild(detectionType);
+      detectionEl.appendChild(detectionRationale);
+      detectionsSection.appendChild(detectionEl);
+    });
+    
+    resultEl.appendChild(detectionsSection);
+  }
+
+  // Top issues section (if any)
+  if (result.topIssues && result.topIssues.length > 0) {
+    const issuesSection = document.createElement('div');
+    issuesSection.style.cssText = 'margin-bottom: 12px;';
+    const issuesTitle = document.createElement('div');
+    issuesTitle.textContent = 'Reliability Concerns';
+    issuesTitle.style.cssText = 'font-size: 12px; font-weight: 600; color: #e5e7eb; margin-bottom: 8px;';
+    issuesSection.appendChild(issuesTitle);
+    
+    const issuesList = document.createElement('ul');
+    issuesList.style.cssText = 'list-style: none; padding: 0; margin: 0;';
+    result.topIssues.slice(0, 3).forEach(issue => {
+      const issueEl = document.createElement('li');
+      issueEl.textContent = `• ${issue}`;
+      issueEl.style.cssText = 'font-size: 11px; color: #d1d5db; margin-bottom: 4px; padding-left: 8px;';
+      issuesList.appendChild(issueEl);
+    });
+    issuesSection.appendChild(issuesList);
+    resultEl.appendChild(issuesSection);
+  }
+
+  // Suggestions section
+  if (result.suggestions && result.suggestions.length > 0) {
+    const suggestionsSection = document.createElement('div');
+    suggestionsSection.style.cssText = 'margin-top: 12px;';
+    const suggestionsTitle = document.createElement('div');
+    suggestionsTitle.textContent = 'Suggested Follow-ups';
+    suggestionsTitle.style.cssText = 'font-size: 12px; font-weight: 600; color: #e5e7eb; margin-bottom: 8px;';
+    suggestionsSection.appendChild(suggestionsTitle);
+    
+    const suggestionsList = document.createElement('div');
+    suggestionsList.style.cssText = 'display: flex; flex-direction: column; gap: 6px;';
+    
+    result.suggestions.forEach((suggestion, index) => {
+      const suggestionBtn = document.createElement('button');
+      suggestionBtn.textContent = suggestion.label || `Suggestion ${index + 1}`;
+      suggestionBtn.style.cssText = `
+        background: rgba(59, 130, 246, 0.15);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        border: 1px solid rgba(96, 165, 250, 0.3);
+        border-radius: 12px;
+        padding: 8px 12px;
+        color: #60a5fa;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        text-align: left;
+        transition: all 0.2s;
+      `;
+      suggestionBtn.onmouseover = () => {
+        suggestionBtn.style.background = 'rgba(59, 130, 246, 0.25)';
+        suggestionBtn.style.borderColor = 'rgba(96, 165, 250, 0.5)';
+        suggestionBtn.style.transform = 'translateY(-1px)';
+      };
+      suggestionBtn.onmouseout = () => {
+        suggestionBtn.style.background = 'rgba(59, 130, 246, 0.15)';
+        suggestionBtn.style.borderColor = 'rgba(96, 165, 250, 0.3)';
+        suggestionBtn.style.transform = 'translateY(0)';
+      };
+      suggestionBtn.onclick = (e) => {
+        e.stopPropagation();
+        if (suggestion.prompt_to_insert) {
+          insertSuggestionPrompt(suggestion.prompt_to_insert);
+        }
+      };
+      suggestionsList.appendChild(suggestionBtn);
+    });
+    
+    suggestionsSection.appendChild(suggestionsList);
+    resultEl.appendChild(suggestionsSection);
+  }
 
   container.appendChild(resultEl);
 
@@ -778,9 +1691,16 @@ function injectImprovePromptButton(messageEl, messageText) {
     return;
   }
 
+  // Check if improvement UI already exists
+  const existingImprovement = messageEl.querySelector('.manipulation-radar-improvement-process');
+  if (existingImprovement) {
+    return; // Improvement already in progress or completed
+  }
+
   const button = document.createElement('button');
   button.className = 'manipulation-radar-improve-prompt-btn';
   button.textContent = '✨ Improve Prompt';
+  button.setAttribute('data-prompt-text', messageText);
   // Inline styles are minimal - CSS class handles most styling
   button.style.cssText = `
     display: inline-flex;
@@ -790,7 +1710,7 @@ function injectImprovePromptButton(messageEl, messageText) {
   // Hover effects are handled by CSS class
   button.onclick = (e) => {
     e.stopPropagation();
-    alert('Prompt improvement feature coming soon! This will use backend AI to suggest better prompts.');
+    showImprovementProcess(messageText, messageEl);
   };
 
   // Insert after message content
@@ -871,10 +1791,19 @@ function showPromptSuggestion(inputEl) {
   };
   
   // Hover effects are handled by CSS class
-  card.onclick = (e) => {
+  card.onclick = async (e) => {
     e.stopPropagation();
     e.preventDefault();
-    alert('Prompt improvement feature coming soon! This will use backend AI to suggest better prompts.');
+    
+    // Get the current input text
+    const currentText = inputEl.value || inputEl.textContent || '';
+    if (currentText.trim().length < 2) {
+      return;
+    }
+    
+    // Show improvement process
+    showImprovementProcessForInput(currentText, inputEl);
+    
     if (card._cleanup) card._cleanup();
     card.remove();
     promptSuggestionCard = null;
@@ -931,8 +1860,16 @@ function observeMessages() {
           lastProcessedMessage = textContent;
           messageEl.dataset.processed = 'true';
 
-          // Create message ID
-          const messageId = `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+          // Create unique message ID based on content hash + timestamp to ensure uniqueness
+          // This ensures same content gets same ID (for caching), but different messages get different IDs
+          const contentHash = textContent.substring(0, 50).replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+          const messageId = `msg-${Date.now()}-${contentHash}-${Math.random().toString(36).substr(2, 9)}`;
+          
+          console.log('Manipulation Radar: New message detected', {
+            messageId,
+            textPreview: textContent.substring(0, 50) + '...',
+            textLength: textContent.length,
+          });
           
           // Create message data object (without analysis)
           const messageData = {
@@ -994,6 +1931,14 @@ function observeUserMessages() {
           const id = `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
           messageEl.setAttribute('data-mr-processed', id);
           processedUserMessages.add(id);
+          
+          // Add to conversation context
+          conversationContext.unshift({
+            role: 'user',
+            content: textContent,
+            messageId: id,
+          });
+          conversationContext = conversationContext.slice(0, 20); // Keep last 20 messages
           
           // Inject button after a short delay to ensure message is fully rendered
           setTimeout(() => {
@@ -1122,6 +2067,7 @@ function updateSidebar() {
         trustScore: currentTrustScore,
         recentFlags: recentFlags,
         messageHistory: messageHistory,
+        verificationHistory: verificationHistory,
         selectedMessage: selectedMessage,
         onBackToOverview: () => {
           selectedMessage = null;

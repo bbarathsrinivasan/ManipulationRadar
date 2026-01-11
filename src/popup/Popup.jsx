@@ -111,6 +111,7 @@ function Popup() {
           </div>
         </div>
 
+
         {/* Info Section */}
         <div className="pt-4 border-t border-gray-700">
           <p className="text-xs text-gray-400 leading-relaxed">
